@@ -1,0 +1,33 @@
+{
+  "name": "homebrewcloud",
+  "version": "1.0.0",
+  "description": "HomebrewDIY dreivative for (AWS Lightsail) cloud",
+  "main": "cloud.js",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jsonata": "^1.8.6",
+    "line-reader": "^0.4.0",
+    "path-to-regexp": "^6.2.1"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CanyonCasa/HomebrewCloud.git"
+  },
+  "keywords": [
+    "homebrew",
+    "web",
+    "server",
+    "cloud",
+    "Lightsail"
+  ],
+  "author": "CanyonCasa",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/CanyonCasa/HomebrewCloud/issues"
+  },
+  "homepage": "https://github.com/CanyonCasa/HomebrewCloud#readme"
+}

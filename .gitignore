@@ -1,0 +1,4 @@
+restricted/*.js*
+bin/node_modules
+bin/x*.js
+*workspace
