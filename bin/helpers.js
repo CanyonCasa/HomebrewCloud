@@ -21,23 +21,24 @@ const jsonSafe = require('./SafeData').jsonSafe;
 ///*************************************************************
 /// helper definitions...
 ///*************************************************************
-var helpers = { $VERSION: fs.statSync(process.argv[0]).mtime.toISOString() };   // export variable
+
+var helpers = { $VERSION: fs.statSync(module.parent.filename||'.').mtime.toISOString()};   // export variable
 
 /**
  * @function asBytes converts a standard notation storage size string (i.e. GB, MB, ...) into number of bytes
  * @param {string} b - storage size string
  * @return {number} equivalent number of bytes
  */
-helpers.asBytes = (b) => String(b).replace(/([\d.]+)([gmk]?)b?/i, (_m,n,l='')=>{
-    let x=l.toLowerCase(); let y=n*(x==l?1000:1024)**(x=='g'?3:x=='m'?2:x=='k'?1:0); return Number(y); });
-    
+helpers.asBytes = (b) => Number(String(b).replace(/([\d.]+)([gmk]?)b?/i, (_m,n,l='')=>{
+    let x=l.toLowerCase(); let y=n*(x==l?1000:1024)**(x=='g'?3:x=='m'?2:x=='k'?1:0); return y; }));
+
 /**
  * @function asList coeorses an array or (comma) delimited string into an array
  * @params {string|[]} x - input array or (comma) delimited string
 * @params {string} [delim=\/,\\s*\/] - optional delimiter string or regexp, default comma+whitespace regexp
  * @return {[]} - array
  */
-helpers.asList = (x,delim=/,\s*/) => x instanceof Array ? x : (x||'').split(delim);
+helpers.asList = (x,delim=/,\s*/) => x instanceof Array ? x : typeof x==='string' ? x.split(delim) : [];
 
 /**
  * @function asList coeorses an array or (comma) delimited string into a delimited string
@@ -45,7 +46,7 @@ helpers.asList = (x,delim=/,\s*/) => x instanceof Array ? x : (x||'').split(deli
  * @params {string} [delim=','] - optional delimiter, default comma
  * @return {string} - comma delimited string
  */
-helpers.asStr = (x,delim=',') => x instanceof Array ? (x||'').join(delim) : x;
+helpers.asStr = (x,delim=',') => x instanceof Array ? x.join(delim) : (x||'');
 
 /**
  * @function asStyle wrapper for ansi style string formating function 
@@ -83,6 +84,15 @@ helpers.base64 = { d64: d64, e64: e64, b64u: b64u, u64b: u64b, j64u: j64u, u64j:
 helpers.distinct = a => a.filter((v,i,a)=>a.indexOf(v)===i);
 
 /**
+ * @function hash calculates hash, default sha256 hex format, for input string... 
+ * @param {string} msg - message text
+ * @param {string} algo - hash algorithm
+ * @param {string} enc - hash digest output format
+ * @return {string} - message digest
+ */
+ helpers.hash = (msg,algo='sha256',enc='hex') => crypto.createHash(algo).update(msg).digest(enc);
+
+ /**
  * @function hmac calculates a message authentication hash, sha256, base64 by default
  * @param {string} msg - message text
  * @param {string} key - hash secret
@@ -90,6 +100,16 @@ helpers.distinct = a => a.filter((v,i,a)=>a.indexOf(v)===i);
  */
 helpers.hmac = (msg,key='',enc='base64',algo='sha256') => crypto.createHmac(algo,key).update(msg).digest(enc);
 
+/**
+ * @function serialize removes all circulr references from an object
+ * @function circularize restores all circulr references of an object; must be linear to start!
+ * @param {object} obj - object being modified
+ * @return {object} - altered version of obj
+ * @example
+ *   let circ = {a: 1, b: null}; circ.b = circ;     // circ = <ref *1> { a: 1, b: [Circular *1] }
+ *   let clean = serialize(circ);                   // returns {a: 1, b: '<ref *0>'}
+ *   let dirty = circularize(clean);                // returns <ref *1> { a: 1, b: [Circular *1] }
+ */
 let mt = obj => obj instanceof Array ? [] : {};
 let scanCircularOrSerialObj = (alt, obj, restore=false, lineage={obj:[],alt:[]}) => {
     if(!obj || typeof obj != "object") return alt;          // only applies to non-null objects
@@ -109,18 +129,14 @@ let scanCircularOrSerialObj = (alt, obj, restore=false, lineage={obj:[],alt:[]})
     lineage.alt.pop();                                      // cleanup traveled stack for recursive calls
     return alt;
 };
-/**
- * @function serialize removes all circulr references from an object
- * @function circularize restores all circulr references of an object; must be linear to start!
- * @param {object} obj - object being modified
- * @return {object} - altered version of obj
- * @example
- *   let circ = {a: 1, b: null}; circ.b = circ;     // circ = <ref *1> { a: 1, b: [Circular *1] }
- *   let clean = serialize(circ);                   // returns {a: 1, b: '<ref *0>'}
- *   let dirty = circularize(clean);                // returns <ref *1> { a: 1, b: [Circular *1] }
- */
 helpers.serialize = obj => scanCircularOrSerialObj(mt(obj),obj);
 helpers.circularize = obj => scanCircularOrSerialObj(helpers.jxCopy(obj),obj,true);
+
+// get all methods of an object...
+helpers.getAllMethods = chk => { const props = []; let obj = chk;
+    do { props.push(...Object.getOwnPropertyNames(obj)); } while (obj = Object.getPrototypeOf(obj)); // folow prototype chain
+    return props.sort().filter((p,i,a) =>(p!=a[i+1] && typeof chk[p] === 'function'));  // filter functions
+};
 
 /**
  * @function isMod determines if a number is of a given modulo, default 2 (i.e. even-odd function)
@@ -207,15 +223,37 @@ helpers.pad = (str,len,ch=' ',left=false) => left ? (Array(len+1).join(ch)+Strin
   (String(str)+Array(len+1).join(ch)).slice(0,len);
 
 /**
- * @function printObj returns the simple serialized object or array with verbose JSON look for logging
- * @param {object} o - object serialized
+ * @function print returns a simple (non--verbose) serialized variable for logging
+ * @param {any} x - serialized variable
+ * @param {object} options - options:
+ *   quote: quote character to use for strings
+ *   keys: quote character to use for object keys; keys with space or underscore automatically quoted
+ *   max: max length of return string; truncated with ... to indicate more
  * @return {string} single line serial string
  */
-helpers.printObj = (o) => {
-    let str = o instanceof Array ? '[' : '{';
-    for (let p in o) { str += (o instanceof Array ? '' : p+': ') + (typeof o[p] == 'string' ? "'" + 
-      o[p].replace("'","\\'") + "'" : (typeof o[p] == 'object' ? helpers.printObj(o[p]) : o[p])) + ", " };
-    return str.slice(0,-2) + (str.startsWith('[') ? ']' : '}'); };
+let print = (x,options={}) => {
+    const seen = [];
+    opts = Object.assign({},typeof options=='object' ? options : {max: options})
+    opts.quote = opts.quote || (opts.keys ? opts.keys : "'");
+    let qk = (y,z) => z ? `${z}${y}${z}` : y.match(/[ -]/) ? `'${y}'` : `${y}`;
+    let q = (y,z) => z ? `${z}${y}${z}` : `'${y}'`;
+    let esc = (s,q="'") => s.replaceAll(q,'\\'+q);
+    function stringify(x,opts){
+        if (x===null || x===undefined || typeof x==='boolean' || typeof x==='number' ) return String(x);
+        if (typeof x==='function' || typeof x==='symbol') return q(esc(String(x),'"',),'"');
+        if (typeof x==='string') { return q(esc(x,opts.quote),opts.quote); }
+        if (x instanceof Date) return q(x.toISOString(),opts.quote);
+        if (x instanceof Array) return '['+(x.map(i=>stringify(i,opts))).join(',')+']';
+        if (seen.includes(x)) return '"[Circular]"';
+        seen.push(x);
+        return '{'+
+            Object.entries(x).map(e=>[qk(e[0],opts.keys),stringify(e[1],opts)].join(':')).join(',')
+            +'}';
+    };
+    let y = stringify(x,opts);
+    return (opts.max>2 && y.length>opts.max) ? y.substring(0,opts.max-3)+'...' : y;
+};
+helpers.print = print;
 
 /**
  * @function pluralize returns the correct word form for number given
@@ -246,6 +284,13 @@ helpers.resolveURL = (...args) => args.join('/').replace(/\/{2,}/g,'/').replace(
  */
 helpers.sleep =  ms => new Promise(r => setTimeout(r, ms));
 
+/**
+ * @function splitAt splits a string or array at an index returning both parts
+ * @param  {xs} string or array to split
+ * @param  {index} position of split
+ * @return array of 2 strings or 2 arrays
+ */
+helpers.splitAt = (xs,index) => [xs.slice(0,index), xs.slice(index)];
 /**
  * @function str2RegExp converts a string (formated as a RegExp) into a RegExp primitive
  * @param {string} str - regular expression string

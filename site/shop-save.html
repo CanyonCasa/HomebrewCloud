@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+
+<html lang="en-US">
+
+<head>
+<meta charset="UTF-8">
+<title>SaranamABQ Network</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,300i,400,400i,700" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<link rel="stylesheet" href="/styles/site.css">
+<script src="https://unpkg.com/vue@3"></script>
+<script type="module" src="/scripts/ClientLib.js"></script>
+<script type="module" src="/scripts/VueLib3.js"></script>
+<script type="module" src="/scripts/siteVueLib3.js"></script>
+</head>
+
+
+<body>
+<div id="app" class="page">
+
+    <!-- Top header and menu -->
+    <div id="header" class="header">
+        
+        <!-- menu interface -->
+        <i class="menu-icon" v-tip="'menu'" v-icon:menu @click="popup('menu')"></i>
+        <div v-show="dialog=='menu'" class="menu-content">
+            <a v-for="m in pageMenu" @click="pick(m[0])">{{m[1]}}</a>
+        </div>
+        
+        <span class="title">SaranamABQ Network</span>
+        
+        <!-- login interface -->
+        <i class="nav-icon" v-tip.before="'login'" @click="popup('login')" v-icon:account_circle></i>
+        <dialog-login :show="dialog=='login'" @user="(u)=>user=u" @new="popup('account')" @close="popup"></dialog-login>
+        
+        <!-- account settings interface -->
+        <span class="nav-block" v-tip="'account'" @click="popup('account')">
+            <i class="nav-icon" v-icon:person></i>
+            <i class="nav-icon-overlay" v-icon="user.valid?'settings':'add'"></i>
+        </span>
+        <dialog-account :who="user" :show="dialog=='account'" @close="popup"></dialog-account>
+    
+        <!-- logout interface -->
+        <dialog-logout :show="user.username" :who="user" @logout="()=>user={member:''}"></dialog-logout>
+           
+    </div>
+
+    <!-- loadable content section -->
+    <div id="main" class="main">
+        <!-- banner logo -->
+        <img v-if="pageLogo" class="logo" :src="pageLogo" />
+        
+        <!-- home page -->
+        <div v-if="pages['home'].loaded" class="home">
+        <component :is="custom('home')" :page="pages['home']" :show="page=='home'"></component>
+        </div>
+
+        <!-- home page -->
+        <div id="home" :show="page=='home'">
+            <p>This site serves only Saranam staff and clients with authorized accounts.</p>
+            <p>For Saranam's public site go to <a href="https://saranamabq.org">https://saranamabq.org</a></p>
+        </div>
+        
+        <!-- loadable iframes -->
+        <h1 v-show="pg.src&&!pg.loaded" >Loading frame, please wait...</h1>
+        <iframe v-for="f,n of pagesFrames" :ref="n" :name="n" v-show="page==n&&f.loaded" :class="'iframe '+n"></iframe>
+
+        <!-- lazy-loading custom component -->
+        <lazy-loader v-for="a,n in pagesLazyLoads" :key="n" :name="n" :required="a.lazy" :show="page==n" @ready="pageLoaded">
+        <component :is="custom(n)" :page="a" :show="page==n" :user="user"></component>
+        </lazy-loader>
+        
+        <!-- custom component -->
+        <component v-for="p,n in pagesOthers" :is="custom(n)" :key="n" :name="n" :page="p" :show="page==n" 
+        :user="user"></component>
+    </div> <!-- main -->
+
+    <!-- page footer block -->
+    <div class="footer">&copy; 2022 Saranam LLC</div>
+
+</div>
+
+<script type="module" src="/scripts/siteModel.js"></script>
+<!--<script type="module" src="/scripts/siteModel.js"></script>-->
+<!--<script>
+
+// window operations...
+window.onload = vm.init;
+
+</script>-->
+
+</body>
+</html>

@@ -1,0 +1,211 @@
+/* var declarations... */
+
+/* font declarations */
+
+
+
+/* Saranam Theme colors */
+.saranam-blue { color:#FFFFFF!important;background-color:#005189!important }
+.saranam-text-blue,.saranam-hover-text-blue:hover { color:#005189!important }
+.saranam-lightblue { color:#000000!important;background-color:#81AFD3!important }
+.saranam-text-lightblue,.saranam-hover-text-lightblue:hover { color:#81AFD3!important }
+.saranam-brightblue { color:#FFFFFF!important;background-color:#0387BF!important }
+.saranam-text-brightblue,.saranam-hover-text-brightblue:hover { color:#0387BF!important }
+.saranam-boldblue { color:#FFFFFF!important;background-color:#3f51b5!important }
+.saranam-text-boldblue,.saranam-hover-text-boldblue:hover { color:#3f51b5!important }
+.bkgd-orange { color:#fff!important;background-color:#ff5722!important }
+.text-orange { color:#ff5722!important }
+.text-black { color:#000000!important }
+.text-gray { color:#808080!important }
+.text-red { color:#FF0000!important }
+
+.tiny-text { font-size:10px!important; }
+.small-text { font-size:12px!important; }
+.medium-text { font-size:15px!important; }
+.large-text { font-size:18px!important; }
+.xlarge-text { font-size:24px!important; }
+
+.margin{margin:16px!important}.margin-left{margin-left:16px!important}.margin-right{margin-right:16px!important}
+.padding-small{padding:4px 8px!important}.padding{padding:8px 16px!important}.padding-large{padding:12px 24px!important}
+.round-small{border-radius:2px}.round,.round-medium{border-radius:4px}.round-large{border-radius:8px}.round-xlarge{border-radius:16px}.round-xxlarge{border-radius:32px}
+.left{float:left!important}
+.right{float:right!important}
+.center{text-align:center!important}
+.badge { display:inline-block; padding:2px 6px; text-align:center; border-radius:50%; width: 12px; margin-right: 8px; }
+.input{ display:block; padding:8px; border:1px solid #ccc; width:100% }
+.image{ max-width:100%; height:auto; }
+
+.container { clear: both; padding: 16px; }
+.display-container { position: relative; }
+.display-middle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);-ms-transform:translate(-50%,-50%)}
+.modal{z-index:3;display:none;position:fixed;left:0;top:100px;width:100%;height:100%;overflow:auto}
+.modal-content{margin:auto;background-color:#fff;position:relative;padding:0;outline:0;width:600px}
+.eye { position:absolute;right:0px;bottom:4px;z-index:10; }
+.login-close { float: right!important; padding-bottom: 8px; }
+/*@media (max-width:600px){.modal-content{margin:0 10px;width:auto!important}.modal{padding-top:30px}
+@media (max-width:600px){.modal-content{margin:0 10px;width:auto!important}.modal{padding-top:30px}
+@media (max-width:768px){.modal-content{width:500px}.modal{padding-top:50px}}
+@media (max-width:768px){.modal-content{width:500px}.modal{padding-top:50px}}
+@media (min-width:993px){.modal-content{width:900px}*/
+
+html,body{ font-family: Verdana, sans-serif; font-size:15px; line-height:1.0; } html{ overflow-x:hidden; }
+h1{font-size:36px}h2{font-size:30px}h3{font-size:24px}h4{font-size:20px}h5{font-size:18px}h6{font-size:16px}
+h1,h2,h3,h4,h5,h6{font-family:"Segoe UI", Arial, sans-serif; font-weight:400; margin:10px 0; clear: both;}
+
+textarea { -webkit-box-sizing: border-box;	-moz-box-sizing: border-box; box-sizing: border-box; width: 100%; }
+
+/* special text */
+/*.vw-text-large{font-size:3vw;text-shadow:1px 1px #81AFD3;}*/
+.vw-text-large{font-size:3vw;}
+
+/* Top level navigation bar ... */
+.topnav {
+    background-color: #005189;
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+    top: 0;
+    z-index: 10;
+}
+/* Style the links inside the navigation bar */
+.topnav a {
+    float: left;
+    display: block;
+    color: white;
+    text-align: center;
+    padding: 16px;
+    text-decoration: none;
+}
+/* Change the color of links on hover */
+.topnav a:hover {
+    background-color: #81AFD3;
+    color: black;
+}
+/* Add an active class to highlight the current page */
+.topnav a.active {
+    background-color: #81AFD3;
+    color: white;
+}
+/* Hide the link that should open and close the topnav on small screens */
+.topnav .icon {
+    display: none;
+}
+
+/* Sub level navigation bar ... */
+.nav {
+    background-color: #81AFD3;
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+    top: 57px;
+    z-index: 1;
+}
+/* Style the links inside the navigation bar */
+.nav a {
+    float: left;
+    display: block;
+    color: #005189;
+    text-align: center;
+    padding: 8px;
+    text-decoration: none;
+}
+/* Change the color of links on hover */
+.nav a:hover {
+    background-color: #white;
+    color: black;
+}
+/* Add an active class to highlight the current page */
+.nav a.active {
+    background-color: white;
+    color: #005189;
+}
+/* Hide the link that should open and close the topnav on small screens */
+.nav .icon {
+    display: none;
+}
+/* When the screen is less than responsive pixels wide, hide all links, except for the first one ("Home"). Show the link that contains should open and close the topnav (.icon) */
+@media screen and (max-width: 800px) {
+  .topnav a:not(:first-child),.nav a {display: none;}
+  .topnav a.icon, .nav a.icon {
+    float: right;
+    display: block;
+  }
+}
+/* The "responsive" class is added to the topnav with JavaScript when the user clicks on the icon. This class makes the topnav look good on small screens (display the links vertically instead of horizontally) */
+@media screen and (max-width: 800px) {
+  .topnav.responsive, .nav.responsive {position: relative;}
+  .topnav.responsive a.icon, .nav.responsive a.icon {
+    position: absolute;
+    right: 0;
+    top: 0;
+  }
+  .topnav.responsive a, .nav.responsive a {
+    float: none;
+    display: block;
+    text-align: left;
+  }
+}
+
+/* slide show */
+.slides { position: relative; } 
+.slide { display: block; opacity: 0; transition: opacity 1s ease-in-out; }
+.slide:not(:first-child) { position: absolute; top: 0; left: 0; }
+.slide img { width:100%; }
+.slide-button { background-color: #005189; color: #81AFD3; }
+.slide-cursor { cursor:pointer; background-color: #005189; color: #81AFD3; padding: 2px 8px 2px 8px;}
+.slide-badge {
+  height:16px;
+  width:16px;
+  padding:0;
+  background-color: #005189;
+  color: #81AFD3;
+  transition: background-color 1s ease-in-out; 
+}
+
+/* main content container */
+.main {
+  position: relative;
+  padding: 64px 8px 64px 8px
+}
+
+.home {
+  max-width: 100%
+}
+
+.internal {
+  position: relative;
+  padding: 64px 8px 64px 8px
+}
+
+
+.tooltip { position: relative; }
+.tip {
+  display: none;
+  position: absolute;
+  right: 2em;
+  width: auto;
+  padding: 2px;
+  bottom: 1.25em;
+  background-color: black;
+  color: #81AFD3;
+  font-family: 'Anaheim', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  vertical-align: baseline;
+  white-space:nowrap;
+  z-index: 10;
+}
+.tip-left { left: 2em; right: unset; }
+.tip-right { right: 2em; left: unset; }
+.tooltip:hover .tip, .tooltip:active .tip { display: inline-block; }
+
+@media (min-width:512px) {
+  body { 
+    max-width: 512px; 
+    margin: auto;
+    }
+}
+
+

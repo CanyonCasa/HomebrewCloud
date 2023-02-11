@@ -19,8 +19,8 @@ require("./Extensions2JS"); // dependency on Date stylings
 
 // simple regular expression pattern test ...
 function rexSafe(data,pattern,dflt) {
-  var m=data.match(pattern);
-  return (m) ? m[0] : dflt!==undefined ? dflt : undefined;
+  var m=String(data).match(pattern);
+  return (m) ? data.constructor(m[0]) : dflt!==undefined ? dflt : undefined;  // returns same type of data! (i.e. numbers or strings)
 };
 
 // scalarSafe scrubs scalar data using specified filter defined as pattern (string or RegExp) or [pattern,default], 
@@ -28,11 +28,12 @@ function rexSafe(data,pattern,dflt) {
 //     undefined, null, '', '*', boolean, numeric, integer, date, or RegExp
 //   dflt represents default value when no data is present or date modifier (i.e. date style format)    
 //   Note: regex backslashes must be escaped!!!, e.g. \\t for tab
-function scalarSafe(data,filter){
-  var [pat,dflt] = (Array.isArray(filter)) ? filter : [filter];
-  // if no data, except for date, return default
-  if ((data===undefined || data==='') && pat!='date') { return dflt!==undefined ? dflt : data; };
+function scalarSafe(data,filter,verbose){
+  var [pat,dflt] = filter instanceof Array ? filter : [filter];
+  if (verbose) console.log(`scalarSafe: filter '`,data,`' with pattern: '${pat}' and default: '${dflt}'`);
   if (pat==='*') return data; // bypass, no filtering
+  // if no data, except for patterns, return default
+  if ((data===undefined || data===null || data==='') && !['boolean','date','choice'].includes(pat)) { return dflt!==undefined ? dflt : data; };
   // begin checking data...
   // explicitly test pattern and data... 
   switch (pat) {
@@ -49,40 +50,43 @@ function scalarSafe(data,filter){
       return (isNaN(Date.parse(data)) ? new Date() : new Date(data)).style(dflt||'iso'); break;
     case 'choice':                              // value must be one of a list (dflt), default to first item
       if (typeof dflt == 'string') dflt = dflt.split(',');  // dflt may be comma delimited string or array
-      return (dflt.indexOf(data)==-1) ? dflt[0] : data;
+      return dflt.indexOf(data)==-1 ? dflt[0] : data;
     default:
       let re = (x) => new RegExp(x.slice(1,x.lastIndexOf('/')),x.slice(x.lastIndexOf('/')+1));
-      pat = pat=='id' ? /^[a-z0-9_-]+/i : pat=='text' ? /^[^\/<>]+/ :
+      pat = pat=='id' ? /^[$a-z0-9_-]+/i : pat=='text' ? /^[^\/<>]+/ :
             ((typeof pat=='string') && pat.startsWith('/')) ? re(pat) : undefined;
-      if (typeof data!=='string' || !(pat instanceof RegExp)) return dflt||''; // only string data and regex pattern should remain...
-      return rexSafe(data,pat,dflt); 
+      if (!(pat instanceof RegExp)) return dflt||''; // only data and regex pattern should remain...
+      let rx = rexSafe(data,pat,dflt);
+      if (verbose) console.log(`rexSafe: filter '`,data,`' with pattern: '${pat}' and default: '${dflt}' => ${rx}`);
+      return rx;
+ 
   };
 };
 
 // recursive JSON filter. Expects a filter with structure matching JSON data, jx
-function jsonSafe(jx,filter) {
+function jsonSafe(jx,filter,verbose) {
+  if (verbose) console.log('jsonSafe: filter ',jx, ' with ', filter);
   if (filter==='*') return jx;
   if (typeof jx!='object') {
     // scalar input...
-    return scalarSafe(jx,filter);
+    return scalarSafe(jx,filter,verbose);
   } else if (Array.isArray(jx)) {
     // array input... note filter should be an array of [pattern,dflt] arrays
     var jxa = [];
     if (filter.length==1) {
       // shortcut filter definition supported for arrays; if only 1 element, use same filter[0] for all jx checks
-      for (var i=0;i<jx.length;i++) jxa.push(jsonSafe(jx[i],filter[0]));
+      for (var i=0;i<jx.length;i++) jxa.push(jsonSafe(jx[i],filter[0],verbose));
     } else {
       // longhand - only filter elements defined in filter
-      for (var i=0;i<filter.length;i++) jxa.push(jsonSafe(jx[i],filter[i]));
-    }
+      for (var i=0;i<filter.length;i++) jxa.push(jsonSafe(jx[i],filter[i],verbose));
+    };
     return jxa;
-  }
-  else {
+  } else {
     if (jx==null) return jx;  // null never filtered
     // assume object input...
     // use keys of respective filter item for checks, extra jx keys not in filter are removed!
     var jxo = {};
-    for (var k in filter) jxo[k] = jsonSafe(jx[k],filter[k]);
+    for (var k in filter) jxo[k] = jsonSafe(jx[k],filter[k],verbose);
     return jxo;    
   };
 };

@@ -1,4 +1,7 @@
 restricted/*.js*
+restricted/*.sq3
 bin/node_modules
 bin/x*.js
 *workspace
+bin/convert*.js
+shack

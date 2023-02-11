@@ -50,20 +50,18 @@ For this method you configure Apache to proxy requests to the localhost:port def
 
     <VirtualHost _default_:443>
     ServerName YOUR_SERVER_NAME
-    #ServerAlias *
     SSLEngine on
     SSLCertificateFile "/opt/bitnami/apache/conf/bitnami/certs/server.crt"
     SSLCertificateKeyFile "/opt/bitnami/apache/conf/bitnami/certs/server.key"
-    #DocumentRoot /opt/bitnami/projects/sample
-    #<Directory "/opt/bitnami/projects/sample">
-    #  Options -Indexes +FollowSymLinks -MultiViews
-    #  Require all granted
-    #</Directory>
+    RequestHeader set X-Forwarded-Port "443"
+    RequestHeader set X-Forwarded-Proto "https"
     ProxyPass / http://localhost:PORT/
     ProxyPassReverse / http://localhost:PORT/
     </VirtualHost>
 
-Be sure to change YOUR_SERVER_NAME and PORT to those of your app.
+Be sure to change YOUR_SERVER_NAME and PORT to those of your app. 
+
+**Note, that when later setting up a site certificate, the script will make other changes to this file needed for certificate requests and renewal.**
 
 After defining your domain/hosts and ensuring proper DNS setup, run the following command:
 

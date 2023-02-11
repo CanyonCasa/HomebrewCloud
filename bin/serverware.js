@@ -10,11 +10,10 @@
 ///*************************************************************
 /// Dependencies...
 ///*************************************************************
-const url = require('url');
 const fs = require('fs');
 const qs = require('querystring');
-const { asBytes, asList, base64, jxCopy, jxFromCircular, jxFrom, jxTo, resolveSafePath, uniqueID, verifyThat } = 
-  require('./helpers');
+const { asBytes, asList, base64, hash, jxFromCircular, jxFrom, jxTo, print, resolveSafePath, 
+    uniqueID, verifyThat } = require('./helpers');
 const { auth, httpStatusMsg, jwt, logins, statistics, mimeType } = require('./workers');  
 const pathMatch = require("path-to-regexp").match;
 const { sniff } = require('./streams');
@@ -58,7 +57,7 @@ serverware.createContext = () => ({
         return hdrs._hdrs.filterByKey(v=>v!==undefined);
     },
     routing: {              // current context routing data
-        route: [],          // current route
+        route: {},          // current route
         index: 0,           // current route index
     },
     next: null              // placeholder for next route call
@@ -86,12 +85,13 @@ let parseAuthHeader = async (header) => {
 };
 
 let urlParse = (url) => {
-    let tmp = new URL(url);
+    let tmp = new URL(url); // returns a class of getters and setters
+    let protocol = tmp.protocol.replace(':','');
     let query = {};
-    let params = tmp.searchParams;
-    for (let k of params.keys()) { query[k]= params.getAll(k).length<2 ? params.get(k) : params.getAll(k); };
-    return { href: tmp.href, origin: tmp.origin, protocol: tmp.protocol, host: tmp.host, hostname: tmp.hostname,
-        port: tmp.port || tmp.protocol=='https' ? 443 : 80, pathname: tmp.pathname, search: tmp.search, query: query };
+    let pObj = tmp.searchParams;
+    for (let k of pObj.keys()) { query[k]= pObj.getAll(k).length<2 ? pObj.get(k) : pObj.getAll(k); };
+    return { href: tmp.href, origin: tmp.origin, protocol: protocol, host: tmp.host, hostname: tmp.hostname,
+        port: tmp.port || (protocol=='https' ? 443 : 80), pathname: tmp.pathname, search: tmp.search, query: query };
 };
 
 /**
@@ -104,7 +104,7 @@ let parseRequestProperties = (req) => {
     let [contentType, boundary] = (req.headers['content-type'] || 'text/*').split('; ');
     let debug = req.url.endsWith('!');
     let protocol = req.headers['x-forwarded-proto'] || 'http';
-    let host = req.headers.host || req.headers['x-forwarded-host'] || '';
+    let host = req.headers['x-forwarded-host'] || req.headers.host || '';
     let url = debug ? req.url.slice(0,-1) : req.url;
     let rx = {
         HEADERS: req.headers,
@@ -122,7 +122,8 @@ let parseRequestProperties = (req) => {
     };
     rx.mergekeys(urlParse(rx.original.href));
     let verbChk = (v,m) => v==m || (v=='get'&&m=='head') || v=='any';
-    return { debug: debug, request: rx, verbIs: vs=>asList(vs).some(v=>verbChk(v.toLowerCase(),rx.method)) };
+    let verbIs = vs=>asList(vs).some(v=>verbChk(v.toLowerCase(),rx.method));
+    return { debug: debug, request: rx, verbIs: verbIs };
 };
 
 // URL rewrite process...
@@ -134,13 +135,13 @@ let urlRewrite = (rules,url) => {
 };
 
  /**
- * @function authorize validates a user's access to a particular resource based on group memebership
+ * @function authorize validates an authenticated user's access to a particular resource based on group memebership
  * @param {string|array} allowed - list of groups allowed permission to the resource
  * @param {string|array} memberOf - list of groups of which user is a member
  * @return {boolean} indicates user's permission 
  */
-let authorize = (allowed,memberOf) => { // user assumed authenticated if this gets called!
-    if (allowed===undefined) return true;
+let authorize = (allowed,memberOf) => { // user authenticated if this gets called; otherwise default "()=>false" gets called!
+    if (allowed===undefined || allowed.includes('users')) return true;
     let granted = asList(allowed);
     let membership = asList(memberOf);
     return  membership.some(m=>granted.includes(m)) || membership.includes('admin');
@@ -152,26 +153,44 @@ let authorize = (allowed,memberOf) => { // user assumed authenticated if this ge
 * @return {object} middleware
 */
 async function authenticate(ctx) {
+    let self = this;
+    let usersDB = self.db.users;
+    let scribble = this.scribe;
+    scribble.trace(`authenticate: ${print(ctx.request.HEADERS.authorization,100)}`);
     let header = await parseAuthHeader(ctx.request.HEADERS.authorization);  // always needed for authentication
     if (header.method==='bearer') { // JWT authentication requested
         if (!jwt.verify(header.token)) logins.log(header.username,'failed JWT', { code: 401, msg: 'Expired or Invalid JWT credentials' });
         ctx.user = header.fields.payload;  // valid JWT so authentication valid
         logins.log(ctx.user.username,'bearer');
     } else if (header.method==='basic') { // Basic authentication requested (i.e. login)
-        if (!header.username && !header.pw) logins.log(header.username,'invalid', { code: 401, msg: 'Invalid authentication credentials' });
-        let user = this.getUser(header.username);
-        if (verifyThat(user,'isEmpty')) logins.log(header.username,'invalid', { code: 401, msg: 'Invalid user credentials' });
+        if (!header.username && !header.pw) logins.log(header.username,'failed invalid', { code: 401, msg: 'Invalid authentication credentials' });
+        let user = usersDB.getUser(header.username);
+        if (verifyThat(user,'isEmpty')) logins.log(header.username,'failed user', { code: 401, msg: 'Invalid user credentials' });
         if (user.status!=='ACTIVE') logins.log(user.username,'failed inactive', { code: 401, msg: 'Inactive user' });
         let valid = (await auth.checkPW(header.pw,user.credentials.hash)) ||    // may be a password (hash) login
             auth.checkCode(header.pw,user.credentials.passcode);                // or a passcode login
+        ////////////////////////////////////////////////////////////////
+        // TEMPORARY PATCH FOR BACK COMPATIBILITY WITH PRIOR HOMEBREW CODE
+        if (!valid) {   // may be old format of pre-hashed pw...
+            let oldChallenge = hash(header.username+header.pw);
+            valid = await auth.checkPW(oldChallenge,user.credentials.hash);
+            if (valid) {    // update credentials
+                user.credentials.oldHash = user.credentials.hash;
+                user.credentials.hash = await auth.genHashPW(header.pw);
+                scribble.trace(`authenticate: updating ${user.username} credentials `);
+                usersDB.chgUser(user.username,{credentials: user.credentials});
+            }
+        ////////////////////////////////////////////////////////////////
+        };
         if (!valid) logins.log(user.username,'failed login', { code: 401, msg: 'Authentication failed!' });
         delete user.credentials; // remove sensitive user information
         ctx.user = user;
         logins.log(ctx.user.username,'basic');
     };
-    // only get here if user has been validated; other methods will be rejected in parseAuthHeader
+    // only get here if user has been authenticated; other methods will be rejected in parseAuthHeader
     ctx.authenticated = header.method;  
     ctx.authorize = (allowed,membership=ctx.user.member) => authorize(allowed,membership);
+    scribble.trace(`authenticate: ${ctx.user.username} => ${ctx.user.member}`);
 };
 
 /// Body parsers...
@@ -255,11 +274,14 @@ function bodyParseFormData(req,ctx,options) {
 };
 
 function bodyParseJSON(req,ctx,options) {
+    let self = this;
+    let scribble = this.scribe;
     return new Promise((resolve,reject)=>{
-        const MARKER = /data:(.*?)?;?(base64)?,/;
+        const MARKER = /data:([^;]*)?;([^,]*)?,/;
         const TEMP = options.temp;
         let { request:max, upload } = options.limits;
         let streamingToFile = false;    // !streamingToFile equates to scanning for boundary
+        let mark = { encoding: '', match: '', type: '' };
         let dest = null;
         let jstr = '';
         let file = {};
@@ -292,7 +314,7 @@ function bodyParseJSON(req,ctx,options) {
                             buffer = buffer.slice(match.index+match[0].length); // buffer after MARKER is file contents
                             let tempFile = resolveSafePath(TEMP,uniqueID(8,36)+'.tmp');
                             dest = fs.createWriteStream(tempFile,'binary');
-                            file = { size: 0, tag: match[0], tempFile: tempFile, mime: match[1], encoding: match[2] };
+                            file = { encoding: match[2], marker: match[0], mime: match[1], size: 0, tempFile: tempFile };
                             streamingToFile = true;
                         } else {
                             let index = buffer.lastIndexOf('"');
@@ -301,10 +323,11 @@ function bodyParseJSON(req,ctx,options) {
                             break;                                              // wait for more content
                         };
                     } else {    // streaming mode
-                        let eof = buffer.includes('"');
+                        let eof = buffer.includes('"'); // end of contents string
                         // move up to next QUOTE or end of buffer to file; however, must move %4 for decode
                         let end = eof ? buffer.indexOf('"') : (buffer.length - (buffer.length%4));
-                        let bbuf = Buffer.from(buffer.slice(0,end),'base64');   // decode base64...
+                        // decode: base64, or other in the future, or raw buffer...
+                        let bbuf = file.encoding==='base64' ? Buffer.from(buffer.slice(0,end),'base64') : Buffer.from(buffer.slice(0,end));
                         file.size += bbuf.length;
                         if (file.size>upload) throw {code: 413, msg: `File upload limit (${upload}) exceeded`};
                         dest.write(bbuf);                               // write buffer
@@ -350,6 +373,24 @@ function bodyParseText(req,ctx,options) {
     });
 };
 
+function bodyParseUnknown(req,ctx,options) {
+    let limit = options.limits.request;
+    req.setEncoding('utf8');
+    let raw = '';
+    let length = 0
+    return new Promise((resolve,reject)=>{
+        try {
+            req.on('data',chunk=>{ if ((length==0)) {raw += chunk; length += chunk.length}; });
+            req.on('end',()=>{ 
+                let sample = raw.substring(0,20) + length>20 ? '...' : '';
+                let msg = `Malformed body or unsupported data type[${ctx.request.dataType},${length}]: ${sample}}`;
+                reject({ code: 501, msg: msg });
+            });
+            req.on('error',(e)=>reject({ code: 500, msg: `Body parsing error: ${e.toString()}` }));
+        } catch(e) { reject(e); }; 
+    });
+};
+
 function bodyParseUrlEnc(req,ctx,options) {
     let limit = options.limits.request;
     req.setEncoding('utf8');
@@ -369,16 +410,16 @@ function bodyParseUrlEnc(req,ctx,options) {
  * @return {object} ctx
  */
 async function bodyParse(req,ctx,options) {
-    if (!['post', 'put'].includes(ctx.request.method)) return;
+    let self = this;
+    let scribble = this.scribe;
     let opts = ({}).mergekeys(options);
-    if (!ctx.authorize('upload')) opts.limits.upload = 0;
     switch (ctx.request.dataType) {
-        case 'json': return await bodyParseJSON(req,ctx,opts);
+        case 'json': return await bodyParseJSON.call(self,req,ctx,opts);
         case 'urlenc': return await bodyParseUrlEnc(req,ctx,opts);
         case 'text': return await bodyParseText(req,ctx,opts);
         case 'formdata': return await bodyParseFormData(req,ctx,opts);
         case 'octet': return await bodyParseOctet(req,ctx,opts);
-        default: throw { code: 501, msg: `Unknown body data type[${ctx.request.dataType}]...}` };
+        default: return await bodyParseUnknown(req,ctx,opts);   // this always throws an error!
     };
 };
 
@@ -396,8 +437,8 @@ async function bodyParse(req,ctx,options) {
  */
 serverware.addRoute = (table,method,route,asyncFunc) => {
     if (!(asyncFunc instanceof Function)) throw "ERROR: middleware requires function declaration";
-    let routeFunc = route ? pathMatch(route, { decode: decodeURIComponent }) : null;    // define route parse/test function
-    table.push({ method:method, route: route, test:routeFunc, afunc:asyncFunc, op: asyncFunc.name});       // add to the route table
+    let parseFunc = route ? pathMatch(route, { decode: decodeURIComponent }) : null;    // define route parse/match function
+    table.push({ method: method, route: route, parse: parseFunc, afunc: asyncFunc, op: asyncFunc.name});  // add to the route table
     return table;
 };
 
@@ -409,14 +450,14 @@ serverware.addRoute = (table,method,route,asyncFunc) => {
 serverware.router = async function(ctx) {
     let self = this;
     if (!ctx.next) ctx.next = async function(err) { if (err) throw err; return await serverware.router.call(self,ctx); };
-    let check = false;
-    while (!check) {    // find next middleware that matches route and method
+    let match = false;
+    while (!match) {    // find next middleware that matches route and method
         ctx.routing.route = self.routes[ctx.routing.index++];  // get next route or undefined
         if (!ctx.routing.route) throw 404;   // not found if last route already processed
-        //check = (ctx.routing.route.method=='any' || ctx.routing.route.method==ctx.request.method) && 
-        check = ctx.verbIs(ctx.routing.route.method) && (!ctx.routing.route.test || ctx.routing.route.test(ctx.request.pathname));
-        ctx.request.params = ({}).mergekeys(typeof check == 'object' && check.params);
-        ctx.args = ({}).mergekeys(ctx.request.params).mergekeys(ctx.request.query);
+        match = ctx.verbIs(ctx.routing.route.method) && (!ctx.routing.route.parse||ctx.routing.route.parse(ctx.request.pathname));
+        if (!match) continue;
+        ctx.request.params = ({}).mergekeys((typeof match == 'object' && match.params) ? match.params : {});
+        ctx.args = (ctx.args||{}).mergekeys(ctx.request.params).mergekeys(ctx.request.query);
     };
     return await ctx.routing.route.afunc.call(self,ctx);   // call middleware and wait for response or error
 };
@@ -429,24 +470,33 @@ serverware.defineRequestPreprocessor = function(cfg={}) {
     let self = this;
     let scribble = this.scribe;
     let authenticating = this.authenticating;
-    let opts = { temp: '../tmp', limits: {request: '64K', upload: '10M'}, 
+    let opts = { temp: '../tmp', limits: {request: '64K', upload: '10M'},
       log: "RQST[${ctx.request.method}]: ${ctx.request.href}" }.mergekeys(cfg.options);
     let prompt = (msg,vars) => new Function("let ctx=this; return `"+msg+"`;").call(vars);  // ctx->vars->this->ctx
     let bodyParseOptions = {temp: resolveSafePath(opts.temp), 
         limits: { request: asBytes(opts.limits.request), upload: asBytes(opts.limits.upload) }};
     if (!fs.existsSync(bodyParseOptions.temp)) fs.mkdirSync(bodyParseOptions.temp);
     
-    return async function requestProcessor(req,ctx) {
-        let props = parseRequestProperties(req);                                // parse request properties
+    return async function requestProcessor(req,ctx) {   
+        scribble.trace('requestProcessor entered');
+        let props = parseRequestProperties(req);    // parse request properties
         ctx.mergekeys(props);
         if (authenticating && 'authorization' in ctx.request.HEADERS) await authenticate.call(self,ctx);
-        await bodyParse(req,ctx,bodyParseOptions);
-        scribble.log(prompt(opts.log,ctx));                 // log request
+        scribble.log(prompt(opts.log,ctx));         // log request
+        if (ctx.verbIs('post,put,patch')) {
+            if (ctx.authorize() || ctx.request.pathname.startsWith('/user/')) {   // any authenticated user or new user
+                await bodyParse.call(self,req,ctx,bodyParseOptions);
+                scribble.trace(`body data type: ${ctx.request.dataType}`);
+            } else {
+                scribble.warn(`Unauthorized posting...`);
+                throw 401;
+            };
+        };
         if (opts.rewrite) {
             let rewrite = urlRewrite(opts.rewrite,ctx.request.href);
             if (rewrite.changed) {
                 ctx.request.mergekeys(urlParse(rewrite.url));
-                scribble.log(`REWRITE -> ${rewrite.url}`);  // log request
+                scribble.log(`REWRITE -> ${rewrite.url}`);  // log rewrite
             };
         };
         statistics.inc(scribble.tag,'requests');
@@ -459,17 +509,22 @@ serverware.defineRequestPreprocessor = function(cfg={}) {
  * @param {object} ctx - request/response context 
  */
 serverware.defineResponseProcesser = function(cfg={}) {
+    let chunkSize = cfg.chunkSize || 16384;
     let scribble = this.scribe;
 
     return async function processResponse(ctx,res) {
-        let headOnly = ctx.verbIs('head');
+        scribble.trace('processResponse entered...');
+        if (ctx.verbIs('head')) {
+            ctx.headers(ctx.data.headers);
+            ctx.headers().mapByKey((v,h)=>res.setHeader(h,v));   // set response headers
+            res.end();
+            scribble.trace(`HEAD response sent for ${ctx.request.href}`);
+            return;
+        };
         if (ctx.data instanceof ResponseContext) {      // streaming or buffered content
             ctx.headers(ctx.data.headers);     // any included headers
-            if (headOnly) ctx.headers({'Content-length': 0})
             ctx.headers().mapByKey((v,h)=>res.setHeader(h,v));   // set response headers
-            if (headOnly) {
-                res.end();
-            } else if (ctx.data.streaming) {
+            if (ctx.data.streaming) {
                 let bytesSent = 0;
                 let sniffer = sniff(buf=>{bytesSent+=buf.length});
                 ctx.data.contents.pipe(sniffer).pipe(res);
@@ -477,24 +532,25 @@ serverware.defineResponseProcesser = function(cfg={}) {
                     let { compressed, size } = ctx.data;
                     let ratio = bytesSent ? (size/bytesSent).toFixed(2)+'X' : '1X';
                     let summary = `${size}/${bytesSent}/${ratio} bytes`;
-                    scribble.trace(`Streaming ${compressed?'compressed ':''}response sent for ${ctx.request.href} (${summary})`);
                     res.end();
+                    scribble.trace(`Streaming ${compressed?'compressed ':''}response sent for ${ctx.request.href} (${summary})`);
                 });
             } else {    // buffered response
                 res.end(ctx.data.contents);
                 scribble.trace(`Buffered response sent for ${ctx.request.href} (${ctx.data.contents.byteLength} bytes)`);
             };
         } else {        // treat all other responses as JSON
-            let tmp = !headOnly ? (jxFromCircular(ctx.debug ? ({}).mergekeys(ctx) : ctx.data, false)) : '';
-            ctx.headers({'Content-Type': 'application/json', 'Content-Length': tmp.length}).mapByKey((v,h)=>res.setHeader(h,v));
-            while (tmp.length>16384) {
-                res.write(tmp.slice(0,16384));
-                tmp = tmp.slice(16384);
+            let tmp = (jxFromCircular(ctx.debug ? ({}).mergekeys(ctx) : ctx.data, false));
+            let tmpLength = tmp.length;
+            ctx.headers(tmpLength>chunkSize ? {'Transfer-Encoding': 'chunked'} : {'Content-Length': tmpLength})
+            ctx.headers({'Content-Type': 'application/json; charset=UTF-8'}).mapByKey((v,h)=>res.setHeader(h,v));
+            while (tmp.length>chunkSize) {
+                res.write(tmp.slice(0,chunkSize));
+                tmp = tmp.slice(chunkSize);
             };
             res.end(tmp);
-            if (!headOnly) scribble.trace(`JSON response sent for ${ctx.request.href} (${tmp.length} bytes)`);
+            scribble.trace(`JSON response sent for ${ctx.request.href} (${tmpLength} bytes)`);
         };
-        if (headOnly) scribble.trace(`HEAD response sent for ${ctx.request.href}`);
     };
 };
 
@@ -509,6 +565,7 @@ serverware.defineErrorHandler = function(cfg={}) {
     return async function errorHandler(err,ctx,res) {
         try {
             let ex = httpStatusMsg(err);            // standard HomebrewDIY error format
+            if (ex.code==405) scribble.trace(`errorHandler: ${print(ex)}`); // method not supported
             if (ex.code==404 && redirect) {         // if not found provide the option of redirecting
                 let destination = ctx.request.href.replace(...redirect);
                 scribble.trace(`Redirect[${ctx.request.method}] ${ctx.request.href} -> ${destination}`);
@@ -522,8 +579,8 @@ serverware.defineErrorHandler = function(cfg={}) {
                     res.setHeader('Content-Type', 'application/json');
                     res.setHeader('Content-Length', eText.length);
                     res.write(eText);
-                    scribble.error(`HTTP Error[${ex.code}]: ${ex.msg}${ex.detail?'\n'+ex.detail:''}`);
-                    if (ex.code==500 && ctx.debug) console.log(err);
+                    scribble.error(`HTTP Error[${ex.code}]: ${ex.msg}${ex.detail?', '+print(ex.detail,40):''}`);
+                    if (ex.code==500 && ctx.debug) scribble.dump(err);
                 } else {
                     scribble.error(`${ex.detail}`);
                 };

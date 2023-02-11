@@ -13,8 +13,8 @@
 const fs = require('fs');
 const path = require('path');
 const fsp = fs.promises;
-const { asList, asStr, resolveSafePath, verifyThat } = require('./helpers');
-const { analytics, auth, jwt, listFolder, mail, safeStat, sms } = require('./workers');  
+const { asList, asStr, resolveSafePath, verifyThat, print } = require('./helpers');
+const { analytics, auth, jwt, listFolder, mail, safeAccess, safeStat, sms } = require('./workers');  
 const { Cache, FileEntry } = require('./caching');
 const { ResponseContext } = require('./serverware');
 
@@ -32,6 +32,53 @@ var nativeware = {};    // serverware nativeware container
  *      bound to the site scope for access to functions such as scribe 
  */
 
+/**
+ * @function grant authorizes specified users temporary login access by text or email
+ * @param {object} ctx request context
+ * @return {object} summary message
+ */
+async function grant(ctx) {
+    let site = this;
+    let scribble = this.scribe;
+    if (!('users' in site.db)) throw 501;
+    let usersDB = site.db.users;
+    let users = asList(ctx.args.user|| ctx.args.users || ''); // comma delimitted string
+    if (users.length===0) throw {code: 400, msg: 'No user list specified'};
+    let exp = ((e)=>e>10080 ? 10080 : e)(ctx.args.exp || ctx.args.opts?.[0] || 30); // limited expiration in min; IIFE
+    let by = ctx.args.opts?.[1]==='text' ? 'text' : ctx.args.opts?.[1]==='mail' ? 'mail' : 'auto';
+    let ft = (t,u)=>{return u=='d' ? (t>7?7:t)+' days' : u=='h' ? (t>24?ft(t/24,'d'):t+' hrs') : t>60? ft(t/60,'h') : t+' mins'};
+    let expStr = ft(exp);
+    let contacts = usersDB.query('contacts',{ref:'.*'});
+    scribble.trace(`grant users: ${users}, exp: ${expStr}, by: ${by}`);
+    try {
+    let queue = await Promise.all(users.map(u=>{
+        if (!contacts[u]) return { report: null, summary: { msg: `No contact for user` }};
+        let passcode = auth.getLoginCode();
+        usersDB.chgUser(u,{credentials:{ passcode: passcode }});
+        let msg =`${ctx.user.fullname} granted access to...\n  user: ${u}\n  passcode: ${passcode.code}\n  valid: ${expStr}`;
+        scribble.trace(`Action[grant] ${msg.replaceAll('\n','')}`);
+        if (by!=='mail' && contacts[u].phone) {
+            return sms({ to:contacts[u].phone, text: msg });
+        } else if ((by==='mail' && contacts[u].email) || (by==='auto' && !contacts[u].phone && !contacts[u].email)){
+            return mail({ to:contacts[u].email, text: msg });
+        } else { // no specified contact...
+            let via = by==='text' ? 'phone' : by==='mail' ? 'email' : 'phone/email';
+            return { report: null, summary: { msg: `No contact ${via} for user` }};
+        }
+    }));
+    let ok=[], fail=[];
+    let reporting = (rpt,i) =>{
+        if (rpt.error) { scribble.warn(print(rpt.summary.msg,80));} else {scribble.info(print(rpt.summary.msg,80)); };
+        (rpt.error ? fail : ok).push(users[i]);
+    };
+    queue.forEach((rpt,i)=>{ if (rpt instanceof Array) { rpt.forEach(r=>reporting(r,i)); } else { reporting(rpt,i) }; });
+    return { msg: `Login code sent by ${by} to ${ok.join(',')}`, ok: ok, fail: fail, queue:queue }
+    } catch(e) { 
+        let emsg = `Action[grant]: Granting permission failed => ${e.toString()}`;
+        scribble.error(emsg);
+        throw {code: 500, msg: emsg, detail: e};
+    };
+};
 
 /**
  * @function account handles user account management, i.e. create, update, delete users
@@ -39,37 +86,42 @@ var nativeware = {};    // serverware nativeware container
  * @return {object} nativeware
  */
 nativeware.account = function account(options={}) {
-    let usersDB = this.db.users;
     let self = this;
     let scribble = this.scribe;
-    let { route='/user/:action/:user?/:opt?' } = options;
-    scribble.info(`Account nativeware initialized for route ${route}`);
+    let usersDB = this.db.users;
+    scribble.info(`Account nativeware initialized for route ${options.route} ...`);
     return async function accountMW(ctx) {
-        let admin = ctx.authorize('admin,manager');    // authenticated admin or manager
-        let { action, user, opt } = ctx.request.params;
-        let selfAuth = user && user==ctx.user.username;   // user authenticated as self
+        let manager = ctx.authorize('admin,manager');       // authenticated admin or manager
+        let { action, user, opts } = ctx.request.params;
+        scribble.trace(`user[${ctx.request.method}]: ${print(ctx.args)}`);
         if (ctx.verbIs('get')) {
             switch (action) {
                 case 'code':        // GET /user/code/<username> (request activation code)
                     if (!user) throw 400;
-                    let usr = self.getUser(user);
+                    let usr = usersDB.getUser(user);
                     if (verifyThat(usr,'isEmpty')) throw 400;
                     usr.credentials.passcode = auth.getActivationCode();
-                    self.chgUser(user,usr);
+                    usersDB.chgUser(user,usr);
                     let { credentials, credentials: { passcode }, email, phone, username } = usr;
                     let text = `Challenge code: ${passcode.code} user: ${username}`;
-                    // if any opt then by mail, i.e. GET /user/code/<username>/mail, otherwise by SMS
-                    let { report, queue } = await ( opt ? mail({time: true, to: email, text: text}) :
+                    // if opts[0]=='mail' then by mail, i.e. GET /user/code/<username>/mail, otherwise by SMS
+                    let { report, queue } = await ( opts?.[0]==='mail' ? mail({time: true, to: email, text: text}) :
                       sms({time: true, to: phone, text: text}) );
-                    let msg = `Challenge code[${admin?passcode.code:'?'}] sent to ${username} at ${opt?email:phone}`
-                    scribble.info(msg);
-                    return { msg: msg, queue: admin?queue:null, report: report };
-                case 'contacts':    // GET /user/contacts
+                      let msg = `Challenge code[${passcode.code}] sent to ${username} at ${opts?.[0]?email:phone}`
+                      let msgSafe = `Challenge code[?] sent to ${username} at ${opts?.[0]?email:phone}`
+                      scribble.info(msg);
+                    return { msg: manager?msg:msgSafe, queue: manager?queue:null, report: report };
+                case 'grant':
+                    if (!ctx.authorize('grant')){ scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; }
+                    return await grant.call(self,ctx);
+                    break;
                 case 'groups':      // GET /user/groups
                 case 'users':       // GET /user/users
-                    if (!admin) throw 401;
+                    if (!manager) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
+                case 'contacts':    // GET /user/contacts
+                    if (!ctx.authorize('contacts')) { scribble.warn(`Contacts authorization required: ${action}`); throw 401; };
                 case 'names':       // GET /user/names
-                    if (!ctx.authenticated) throw 401;
+                    if (!ctx.authenticated) { scribble.warn(`Authorization required: ${action}`); throw 401; };
                     let uData = usersDB.query(action,{ref:user||'.+'});
                     if (uData) { return uData } else { throw 400; };
                 default:
@@ -80,58 +132,69 @@ nativeware.account = function account(options={}) {
         if (ctx.verbIs('post')) {
             switch (action) {
                 case 'code':        // POST /user/code/<username>/<code> (validate activation code)
-                    let who = self.getUser(user);
+                    let who = usersDB.getUser(user);
                     if (verifyThat(who,'isEmpty')) throw 400;
-                    if (auth.checkCode(opt,who.credentials.passcode) && who.status=='PENDING') {
+                    if (opts[0] && auth.checkCode(opts[0],who.credentials.passcode) && who.status=='PENDING') {
                         who.status = 'ACTIVE';
-                        self.chgUser(who.username,who);
+                        usersDB.chgUser(who.username,who);
                     };
-                    return {msg: `Status: ${who.status}`};
+                    return { msg: `User account is ${who.status}`, detail: who.status };
                 case 'change':      // POST /user/change (new or update or delete)
                     if (!verifyThat(ctx.request.body,'isArrayOfAnyObjects')) throw 400;
                     let data = ctx.request.body;
                     let changes = [];
-                    //const DEFAULTS = usersDB.query('defaults');
-                    const DEFAULTS = {member: 'users', status: 'PENDING'}
                     for (let usr of data) {
-                        let record = usr.record || usr[1]; // usr.ref||usr[0] not trusted, record.username used instead
+                        let record = usr.record || usr[1]; // usr.ref||usr[0] not trusted as same, record.username used instead
+                        if (record===undefined) throw {code: 400, msg: 'NO record, possibly misformated body => [{ref:..., record:...}, ...]'};
                         if (verifyThat(record,'isTrueObject') && record.username) {
                             record.username = record.username.toLowerCase();    // force lowercase usernames only
+                            let selfAuth = record.username===ctx.user.username
                             // if user exists change action, else create action...
-                            let existing = usersDB.query('userByUsername',{username: record.username},true) || {};
+                            let existing = usersDB.query('userByUsername',{username: record.username},{});
                             let exists = verifyThat(existing,'isNotEmpty');
-                            scribble.warn(`exists: ${exists}`);
-                            if (exists && !(admin||selfAuth)) throw 401;    // authorize changes or assume new
-                            self.scribe.trace("existing[%s] ==> %s", record.username, JSON.stringify(existing));
-                            // authorized if: new account (not exists), user is self, or admin
-                            if (!exists || (record.username==ctx.user.username) || admin) { 
+                            if (exists && !(manager||selfAuth)) throw 401;    // authorize changes or assume new
+                            self.scribe.trace(`existing(${exists}) user[${record.username}]: ${print(existing,60)}`);
+                            // authorized here if: new account (not exists), user is self, or manager/admin
+                            self.scribe.trace(`Verified as: self[${record.username===ctx.user.username}], manager[${manager}]`);
+                            if (!exists || selfAuth || manager) {
                                 // build a safe record... filter credentials, membership, and status
-                                record.credentials = record.password ? 
-                                  ({ hash: await auth.createPW(record.password), code: {} }) : 
-                                  exists ? existing.credentials : DEFAULTS.credentials;
-                                delete record.password;
-                                self.scribe.trace(`user record[${record.username}] ==> ${JSON.stringify(record)}`);
-                                let entry = ({}).mergekeys(DEFAULTS).mergekeys(existing).mergekeys(record);
-                                if (!admin) {   // can't change one's own membership or status
-                                    entry.member = exists ? existing.member : DEFAULTS.member;
-                                    entry.status = exists ? existing.status : DEFAULTS.status;
+                                let safe = exists ? existing.credentials : {hash:'',passcode:{},pin:''};
+                                if (record.credentials) {
+                                    if (record.credentials.password) safe.hash = await auth.genHashPW(record.credentials.password);
+                                    if (record.credentials.pin) safe.pin = record.credentials.pin;
                                 };
-                                self.scribe.trace(`user entry[${entry.username}] ==> ${JSON.stringify(entry)}`);
-                                changes.push(self.chgUser(record.username,entry)[0]||[]);
+                                record.credentials = safe;
+                                self.scribe.trace(`user record[${record.username}] ==> ${print(record,40)}`);
+                                let entry = {member: '', status: 'PENDING'}.mergekeys(record);
+                                // can't change one's own membership or status only manager/admin...
+                                if (!manager && exists) entry.mergekeys({member: existing.member, status: existing.status});
+                                self.scribe.trace(`user entry[${entry.username}] ==> ${print(entry,60)}`);
+                                changes.push({user: record.username, result: usersDB.chgUser(record.username,entry)[0]||[]});
                             } else {
-                                changes.push(['error',record.username,self.server.emsg(401)]);  // not authorized
+                                changes.push({code: 401, user: record.username, msg: self.server.emsg(401)});   // not authorized
                             };
                         } else {
-                          changes.push(['error',record.username,self.server.emsg(400)]);        // malformed request
+                          changes.push({code: 400, user: record.username, msg: self.server.emsg(400)});     // malformed request
                         };
                     };
                     scribble.trace("user changes:", changes);
                     return changes;
                 case 'groups':
-                    if (!admin) throw 401;
-                    let grp = ctx.request.body;
+                    if (!manager) throw 401;
+                    let grps = ctx.request.body;
+                    return usersDB.modify('groups',grps);
                 default: throw 400;
             };
+        };
+        if (ctx.verbIs('patch') && action==='archive') {
+            if (!manager) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
+            let data = usersDB.query('archive');
+            let arc = usersDB.db('archive','@',data[0]);
+            let usrs = usersDB.db('users','$',data[1]);
+            usersDB.changed();
+            let amsg = `Archived ${data[0].length} users; ${data[1].length} ACTIVE users.`
+            scribble.log(amsg);
+            return {msg: amsg, archive: arc.length, archived: data[0].length, users: usrs.length};
         };
         throw 501;  // other methods not supported
    };
@@ -203,12 +266,12 @@ nativeware.logAnalytics = function logAnalytics(options={}) {
  */
 nativeware.login = function login(options={}) {
     let scribble = this.scribe;
-    scribble.info('Login nativeware initialized...');
+    scribble.info(`Login nativeware initialized for route ${options.route} ...`);
     return async function loginMW(ctx) {
         scribble.trace(`Login: ${ctx.args.action}`);
         if (ctx.args.action=='logout') return {};
         if (!ctx.authenticated) throw 401;
-        if (ctx.authenticated=='bearer' && !jwt.cfg.renewal) throw { code: 401, msg: 'Token renewal requires login' };
+        if (ctx.authenticated=='bearer' && !ctx.user.ext) throw { code: 401, msg: 'Token renewal requires login' };
         ctx.jwt = jwt.create(ctx.user);
         ctx.headers({authorization: `Bearer ${ctx.jwt}`});
         return { token: ctx.jwt, payload: jwt.extract(ctx.jwt).payload };   // response: JWT (as token), and user data (payload)
@@ -223,84 +286,56 @@ nativeware.login = function login(options={}) {
  */
 nativeware.content = function content(options={}) {
     let scribble = this.scribe;
-    let { auth='', cache={}, compress:compressTypes, index='index.html', indexing, root, route='', tag=this.tag } = options;
+    let { auth='', cache={}, compress:compressTypes, index='index.html', indexing, posts={}, root, route='', tag=this.tag } = options;
     let [ authGet, authPost ] = asList(auth,'|');
     cache.header = cache.header || 'max-age=600';
     if (auth && !cache.header.includes('private')) 
         scribble.warn(`Content[${tag}]: 'Cache-header' for authorized access should include 'private' setting`);
     compressTypes = asList(compressTypes||'css,csv,html,htm,js,json,pdf,txt');
     if (!root) throw `Content[${tag}] nativeware requires a root definition`;
+    Object.keys(posts).forEach(p=>{if(!posts[p].root) throw {code:400, msg: `Site options.posts[${p}] requires 'root' property!`};})
     let theCache = new Cache(cache); // add pre-caching???
     scribble.info(`Content[${tag}] nativeware initialized for route '${route}' and root ${root}`);
+
     return async function contentMW(ctx) {
         scribble.trace(`Content[${tag}]: ${ctx.request.method} ${ctx.request.href}`);
         scribble.trace(`route[${ctx.routing.route.method}]: ${ctx.routing.route.route}`);
-        if (ctx.verbIs('get')) {
-            if (authGet && !ctx.authorize(authGet)) throw 401;    // not authorized
-            let base = ctx.request.pathname + (ctx.request.pathname==='/' ? index : '');
-            let fileSpec = resolveSafePath(root,base);
-            let stats = await safeStat(fileSpec);
-            scribble.trace(`Content[${tag}]: ${fileSpec}, ${stats && stats.isDirectory() ? 'DIR' : 'FILE'}`);
-            if (!stats || stats.isSymbolicLink()) return await ctx.next();  // not found (or found link), continue looking
-            if (stats.isDirectory()) {
-                if (!indexing) throw 403;
-                ctx.headers({'Cache-control': 'no-cache'});
-                return await listFolder(fileSpec,indexing===true?{}:indexing);
+        if (!ctx.verbIs('get')) throw 405;
+        if (authGet && !ctx.authorize(authGet)) throw 401;    // not authorized
+
+        let base = ctx.request.pathname==='/' ? '/'+index : ctx.request.pathname;
+        let fileSpec = decodeURI(resolveSafePath(root,base));
+        let stats = await safeStat(fileSpec);
+        scribble.trace(`Content[${tag}]: ${fileSpec}, ${stats && stats.isDirectory() ? 'DIR' : 'FILE'}`);
+        if (!stats || stats.isSymbolicLink()) return await ctx.next();  // not found (or found link), continue looking
+        if (stats.isDirectory()) {
+            if (!indexing) throw 403;
+            ctx.headers({'Cache-control': 'no-cache'});
+            return await listFolder(fileSpec,indexing===true?{}:indexing);
+        };
+        let newEntry = new FileEntry(fileSpec,{url: base, size: stats.size, time: stats.mtime});
+        let oldEntry = theCache.getEntry(fileSpec);
+        let inCache = oldEntry && oldEntry.matches(newEntry);
+        ctx.headers({'Last-Modified': newEntry.modified});
+        let since = ctx.request.HEADERS['if-modified-since'];
+        if (since && (new Date(since)>=new Date(newEntry.modified)))  throw 304;    // not modified notice
+        let etags = ctx.request.HEADERS['if-none-match'] || '';
+        if (etags && newEntry.hasTagMatch(etags)) throw 304;    // not modified notice
+        // not modified, and "if-..." header included then doesn't even load into cache...
+        try {        
+            if (!inCache) {
+                let store = newEntry.size < theCache.max;
+                let compress = compressTypes.includes(newEntry.ext);
+                await newEntry.load(store,compress);
+                theCache.addEntry(newEntry);
+                oldEntry = newEntry;
             };
-            let newEntry = new FileEntry(fileSpec,{url: base, size: stats.size, time: stats.mtime});
-            let oldEntry = theCache.getEntry(fileSpec);
-            let inCache = oldEntry && oldEntry.matches(newEntry);
-            ctx.headers({'Last-Modified': newEntry.modified});
-            let since = ctx.request.HEADERS['if-modified-since'];
-            if (since && (new Date(since)>=new Date(newEntry.modified)))  throw 304;    // not modified notice
-            let etags = ctx.request.HEADERS['if-none-match'] || '';
-            if (etags && newEntry.hasTagMatch(etags)) throw 304;    // not modified notice
-            // not modified, and "if-..." header included then doesn't even load into cache...
-            try {        
-                if (!inCache) {
-                    let store = newEntry.size < theCache.max;
-                    let compress = compressTypes.includes(newEntry.ext);
-                    await newEntry.load(store,compress);
-                    theCache.addEntry(newEntry);
-                    oldEntry = newEntry;
-                };
-                ctx.headers({'Cache-Control': cache.header});
-                // build return record
-                let compressed = (ctx.request.HEADERS['accept-encoding'] || '').includes('gzip');
-                let data = new ResponseContext(oldEntry.content(compressed));
-                return data;
-            } catch(e) { throw e; };
-        } else if (ctx.verbIs('post')) {
-scribble.warn(`auth: ${authPost}, ${!ctx.authorize(authPost)}`);
-            if (!authPost || !ctx.authorize(authPost)) throw 401;    // not authorized
-            if (!verifyThat(ctx.request.body,'isArrayOfTrueObjects')) throw {code:400, msg: 'Array of "file" objects expected!'};
-            let data = [];
-            for (let f of ctx.request.body) {
-                let spec = resolveSafePath(root,ctx.request.pathname,f.folder,f.name);  // assumes pathname OR f.folder
-                scribble.trace(`POST[spec]: ${spec}`);
-                await fsp.mkdir(path.dirname(spec),{recursive:true});
-                let exists = await safeStat(spec);
-                scribble.trace(`POST[${exists?('EXISTS'+(f.backup?',BAK:'+f.backup:'')+(f.force?',FORCE':'')):'NEW'}]: ${spec}`);
-                if (exists && f.backup) {
-                    let backup = resolveSafePath(root,ctx.request.pathname,f.folder,f.backup);
-                    await fsp.copyFile(spec,backup);
-                };
-                if (!exists || f.force || f.backup) {
-                    if (typeof f.contents == 'object') {
-                        await fsp.copyFile(f.contents.tempFile,spec);
-                        await fsp.rm(f.contents.tempFile);
-                    } else {
-                        await fsp.writeFile(spec,f.contents);
-                    };
-                    data.push(true);
-                    scribble.trace(`POST[${spec}]: saved...`);
-                } else {
-                    data.push(false);
-                    scribble.trace(`POST[${spec}]: NOT saved, use force or backup to enable saving...`);
-                }
-            };
+            ctx.headers({'Cache-Control': cache.header});
+            // build return record
+            let compressed = (ctx.request.HEADERS['accept-encoding'] || '').includes('gzip');
+            let data = new ResponseContext(oldEntry.content(compressed));
             return data;
-        } else { ctx.next(405); };
+        } catch(e) { throw e; };
    };
 };
 

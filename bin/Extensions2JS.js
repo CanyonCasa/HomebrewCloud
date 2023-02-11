@@ -15,7 +15,7 @@
 /// Date Style Extension ...
 const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const DSTYLE = /Y(?:YYY|Y)?|S[MDZ]|0?([MDNhms])\1?|[aexz]|(['"])(.*?)\2/g;  // Date.prototpye.style parsing pattern
+const DSTYLE = /Y(?:YYY|Y)?|[SX][MDZ]|0?([MDNhms])\1?|[aexz]|(['"])(.*?)\2/g;  // Date.prototpye.style parsing pattern
 if (!Date.prototype.style) 
 /**
  * @lends Date#
@@ -44,7 +44,7 @@ if (!Date.prototype.style)
  *    'form':   ["YYYY-MM-DD","hh:mm:ss"], needed by form inputs for date and time (defaults to local realm)
  *    'http':   HTTP Date header format, per RFC7231
  *    'iso':    "YYYY-MM-DD'T'hh:mm:ssZ", JavaScript standard
- *    'stamp:   filespec safe timestamp string, '20161207T21-22-11Z'
+ *    'stamp:   filespec safe timestamp string, '20161207T212211Z'
  *  notes:
  *    1. Add a leading 0 or duplicate field character to pad result as 2 character field [MDNhms], i.e. 0M or MM
  *    2. Use Y or YYYY for 4 year or YY for 2 year
@@ -77,11 +77,12 @@ Date.prototype.style = function(frmt,realm) {
         case 'form': return dx.style('YYYY-MM-DD hh:mm').split(' ');            // values for form inputs
         case 'http': return dx.style('SD, DD SM YYYY hh:mm:ss "GMT"').replace(/([a-z]{3})[a-z]+/gi,'$1');
         case 'iso': return (realm && sign==1) ? base.replace(/z/i,zx) : base;   // ISO (Zulu time) or ISO-like localtime
-        case 'stamp': return dx.style(`YMMDDThh-mm-ss${(realm && sign==1)?'z':'Z'}`);   // filespec safe timestamp
+        case 'stamp': return dx.style(`YMMDDThhmmss${(realm && sign==1)?'z':'Z'}`);   // filespec safe timestamp
         case '':  // object of date field values
             let [Y,M,D,h,m,s,ms] = base.split(/[\-:\.TZ]/);
             return { Y:+Y, M:+M, D:+D, h:+h, m:+m, s:+s, x:+ms, z:zx, e:dx.valueOf()*0.001, a:h<12 ?"AM":"PM", N:dx.getDay(),
-                SM: MONTHS[M-1], SD: DAYS[dx.getDay()], SZ:zone, LY: Y%4==0&&(Y%100==Y%400), ofs: -dx.getTimezoneOffset(),
+                SM: MONTHS[M-1], XM: MONTHS[M-1].substring(0,3), SD: DAYS[dx.getDay()], XD: DAYS[dx.getDay()].substring(0,3), 
+                SZ:zone, XZ: zx, LY: Y%4==0&&(Y%100==Y%400), ofs: -dx.getTimezoneOffset(),
                 dst: !!(new Date(1970,1,1).getTimezoneOffset()-dx.getTimezoneOffset()), iso: dx.toISOString() };
         default:  // any format string
             let pad = (s) => ('0'+s).slice(-2);

@@ -31,37 +31,36 @@ SYNTAX (from within the bin folder):
   See documentation for assumed directory layout and config file details.
 */
 
+// default parameters...
+const endPoints = {
+    account: '/user/:action/:user?/:opts*',
+    api: '/:prefix([$@!~]):recipe/:opts*',
+    login: '/:action(login|logout)'
+};
 
 // load language extension dependencies first...
-// personal library of additions to JS language, only required once
-require('./Extensions2JS');
-
-// read the hosting configuration from (cmdline specified arg or default) JS or JSON file ...
-const cfg = require(process.argv[2] || '../restricted/config');
-const { $VERSION } = require('./helpers');
-
+require('./Extensions2JS');   // personal library of additions to JS language, only required once
 // require node dependencies...
 const os = require('os');
 const http = require('http');
 
-// require low level libraries
-const jxDB = require('./jxDB');                     // simple JSON based database
-const { jxFrom, markTime } = require('./helpers');  // low level utility functions
+// read the hosting configuration from (cmdline specified arg or default) JS or JSON file ...
+const cfg = require(process.argv[2] || '../restricted/config');
+
+// low level libraries; both helpers and workers MUST be called first from cloud.js for correct operation...
+const { $VERSION, jxFrom, markTime} = require('./helpers');   // low level utility functions  
+const { Scribe, sms, statistics } = require('./workers')(cfg.workers);  // high level (complex) functions
+const scribe = Scribe(cfg.workers.scribe);  // main Scribe instance
+
+const jxDB = require('./jxDB');             // simple JSON based database library
 
 // middleware libraries...
-const sw = require('./serverware');         // built-in server functions, request parser, router, and response handler, ...
-const nw = require('./nativeware');         // application built-in middleware functions, including (static) content handler
-const aw = require('./apiware');            // Homebrew API middleware handler
+const serverware = require('./serverware');         // built-in server functions, request parser, router, and response handler, ...
+const nativeware = require('./nativeware');         // application built-in middleware functions, including (static) content handler
+const apiware = require('./apiware');            // Homebrew API middleware handler
 // optional custom user middleware (highest precedence), defined as empty module if not found, overrides native and api functions
-const cw = (()=>{ try { return require('./customware'); } catch (e) { return {}; }; })();   // IIFE
+const customware = (()=>{ try { return require('./customware'); } catch (e) { return {}; }; })();   // IIFE
 
-// load and configure higher level service workers and merge configuration...
-const { auth, jwt, mimeTypesExtend, Scribe, services, sms, statistics } = require('./workers');
-auth.cfg.mergekeys(cfg.workers.auth);
-jwt.cfg.mergekeys(cfg.workers.jwt);
-mimeTypesExtend(cfg.workers.mimeTypes);
-services({mail: cfg.workers.mail, text: cfg.workers.text});
-const scribe = Scribe(cfg.workers.scribe);  // main Scribe instance
 
 // message identifiers...
 const VERSION = cfg.$VERSION || $VERSION;
@@ -78,61 +77,70 @@ let tag = scfg.tag || 'cloud';
 scribe.debug(`HomebrewCloud site '${tag}' setup...`);
 
 scfg.headers = {"x-powered-by": "HomebrewCloud "+VERSION}.mergekeys(scfg.headers);
-let db = {};
+app.mergekeys({cfg: scfg, routes: [], tag: tag, db: {}});
 scfg.databases.mapByKey((def,tag)=>{
-    def.tag = def.tag || tag;      // ensure a defined tag
-    db[tag] = new jxDB(def);       // establish database
+    def.tag = def.tag || tag;       // ensure a defined tag
+    scribe.trace(`Connecting db[${tag}] ...`);
+    app.db[tag] = new jxDB(def);    // establish database
 });
-app.mergekeys({cfg: scfg, tag: tag, db: db, scribe: Scribe(tag)});
+app.scribe = Scribe(tag);
 
 // authentication setup required by auth & account middleware
 app.authenticating = !(scfg.options===null || scfg.options?.auth === null);
-if (app.authenticating && !db.users) scribe.fatal('Users database not found, required for authentication');
-app.getUser = db.users ? (usr) => db.users.query('userByUsername',{username:usr.toLowerCase()}) : ()=>{};
-app.chgUser = db.users ? (usr,data) => db.users.modify('changeUser',[{ref: usr, record: data}]) : ()=>{};
+if (app.authenticating && !app.db.users) scribe.fatal('Users database not found, required for authentication');
+//app.getUser = app.db.users ? (usr) => app.db.users.query('userByUsername',{username:usr.toLowerCase()}) : ()=>{};
+//app.chgUser = app.db.users ? (usr,data) => app.db.users.modify('users',[{ref: usr.toLowerCase(), record: data}]) : ()=>{};
+if (app.db.users) {
+    let proto = Object.getPrototypeOf(app.db.users);
+    proto.getUser = function getUser(usr) { return this.query('userByUsername',{username:usr.toLowerCase()}) };
+    proto.chgUser = function chgUser(usr,data) { return this.modify('users',[{ref: usr.toLowerCase(), record: data}]) };
+};
 
 // build app handlers and routers...
-let routeTable = app.routes;
-let [anw, aaw, acw] = [nw, aw, cw].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(app) : v));  // bind f()'s to App scope
-function addRoute (method,route,afunc) { sw.addRoute(routeTable,method||'',route,afunc); };
+let [appNativeware, appAPIware, appCustomware] = [nativeware, apiware, customware].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(app) : v));  // bind f()'s to App scope
 let { handlers=[], options={}, root } = app.cfg;
-let { account={}, analytics, cors, login } = options===null ? { analytics: null, cors: null } : options;
+let { account={}, analytics, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
+function customizeRoute (obj,code) { obj.route = obj.route||'' + endPoints[code]||''; return obj.route; }
+function addRoute (method,route,afunc) { serverware.addRoute(app.routes,method||'',route,afunc); };
 // create and build middleware stack starting with priority built-in configurable features...
-if (analytics!==null) addRoute('any','',anw.logAnalytics(analytics));
-if (cors!==null) addRoute('any','',anw.cors(cors));
+if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));
+if (cors!==null) addRoute('any','',appNativeware.cors(cors));
 if (app.authenticating) {
-    addRoute('any',account.route||'/user/:action/:user?/:opt?',anw.account(account));
-    addRoute('any','/:action(login|logout)',anw.login(login));
+    customizeRoute(account,'account');
+    addRoute('any',account.route,appNativeware.account(account));
+    customizeRoute(login,'login');
+    addRoute('any',login.route,appNativeware.login(login));
 };
 // custom handlers specified by configuration...
 handlers.forEach(h=>{
+    customizeRoute(h,h.code);
     let { code='', method='any', route='' } = h;
-    let codeWare = acw[code] || aaw[code] || anw[code] || null;
+    let codeWare = appCustomware[code] || appAPIware[code] || appNativeware[code] || null;
     if (codeWare) addRoute(method.toLowerCase(),route,codeWare(h));
 });
-if (root) addRoute('get','',anw.content({root:root}));  // default open static server, if site root defined
+if (root) addRoute('get','',appNativeware.content({root:root}));  // default open static server, if site root defined
 
 // start app service...
-let prepRequest = sw.defineRequestPreprocessor.call(app,app.cfg);
-let sendResponse = sw.defineResponseProcesser.call(app,app.cfg);
-let handleError = sw.defineErrorHandler.call(app,app.cfg);
+let prepRequest = serverware.defineRequestPreprocessor.call(app,app.cfg);
+let sendResponse = serverware.defineResponseProcesser.call(app,app.cfg);
+let handleError = serverware.defineErrorHandler.call(app,app.cfg);
 try {
     http.createServer(async (req,res) => { // Instantiate the HTTP server with async request handler...
         // app code called for each http request...
-        let ctx = sw.createContext();                       // define context for the request response
+        let ctx = serverware.createContext();                       // define context for the request response
         ctx.headers(app.cfg.headers);                       // append site specific headers to context
         try {                                               // wrap all processing to trap all errors
             await prepRequest(req,ctx);                     // parse request headers and body, optionally authenticate
-            ctx.data = await sw.router.call(app,ctx);       // route context through middleware chain, return data
+            ctx.data = await serverware.router.call(app,ctx);       // route context through middleware chain, return data
             await sendResponse(ctx,res);                    // return response to client
         } catch(err) { await handleError(err,ctx,res); };   // handle any error that occurs
     }).listen(app.cfg.port);
     statistics.set('$cloud',null,{host: HOST, start: new Date().toISOString(), mode: MODE});
     scribe.info(`HomebrewCloud site setup complete: ${scfg.host}:${cfg.site.port}`);
-    if (MODE=='production') sms({text:`HomebrewCloud service started on host ${HOST}`})
-      .catch(e=>{console.log('sms failure!:',e); });
+    if (MODE==='production') sms({text:`HomebrewCloud service started on host ${HOST}`})
+      .catch(e=>{scribe.log('sms failure!:',e); });
 } catch(e) { 
     if (MODE=='production') sms({text:`HomebrewCloud service failed to started on host ${HOST}`})
-      .catch(e=>{console.log('sms failure!:',e); });
+      .catch(e=>{scribe.log('sms failure!:',e); });
     scribe.fatal(`HomebrewCloud App failed to start --> ${e.toString()}`) 
 };

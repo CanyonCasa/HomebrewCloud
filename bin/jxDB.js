@@ -9,9 +9,9 @@ usage:
 
 configuration object properties...
   file:         Database file name, default '_memory_'
-  delay:        Cache delay time for saving changes to file, default 1000ms
+  delay:        Cache delay time for reloading/saving changes to file, default 1000ms
   format:       'tabular' (default), 'pretty' or undefined
-  readonly:     Flag to prevent writing to database.
+  readOnly:     Flag to prevent writing to database.
   tag:          reference tag for transcript messages
 data...
   {...}       Optional object to populate database. 
@@ -31,91 +31,136 @@ require('./Extensions2JS');
 const fs = require('fs');
 const fsp = fs.promises;
 const jsonata = require('jsonata');
-const { jxCopy, jxTo, printObj, verifyThat } = require('./helpers');
+const { jxCopy, jxSafe, print, verifyThat } = require('./helpers');
 const { Scribe } = require('./workers');
 
-function jxDB(def={},data) {
-    let dd = {'_':{}, recipes:{}}.mergekeys(data || {});        // default database definition; '_' collection hold cfg...
-    dd['_'].format = def.format || dd['_'].format || 'tabular'; // database storage format: pretty, tabular, undefined
-    dd['_'].delay = def.delay || dd['_'].delay || 1000;         // database write delay
+// "private" database interface... (assumes valid args based on internal only calls!)
+function dbWrapper(database) {
+    var dbase = {}.mergekeys(database);
 
-    var privateDB = dd;     // "private" data container to hide db from direct access
-    if (data) privateDB.mergekeys(data);
-    var writeable = true;
-    this.file = def.file || '_memory_';                         // JSON DB filespec
-    this.readOnly = (enable) => { if (enable!==undefined) writeable = !enable; return !writeable; };
-    this.readOnly(def.readOnly);
-    this.timex = null;                                          // saves delay timeout timer reference
-    this.scribble = Scribe(def.scribe||def.tag||'db');          // transcripting reference
-
-    if (this.file==='_memory_') {
-        this.watchInhibited = true;
-    } else {
-        let mode = fs.existsSync(this.file) ? 'reading' : 'writing';
-        try {
-            if (!data && (mode=='reading')) {
-                let source = fs.readFileSync(this.file,'utf8');
-                privateDB = jxTo(source, privateDB);
-            } else {
-                fs.writeFileSync(this.file, JSON.stringify(privateDB));
-            };
-        } catch (e) { throw `ERROR ${mode} database ${this.file}: ${e}`};
-        this.watchDB(def.watch!==false);
-    };
-
-    // private database interface... (assumes valid args based on internal only calls!)
-    this.db = function(collection, ref, value) {
+    return function(collection, ref, value) {
         // database and collection actions...
-        if (collection===undefined) return privateDB;               // getter
-        if (collection && collection instanceof Object) { 
+        if (collection===undefined) return dbase;                   // database getter
+        if (collection instanceof Object) { 
             if ('source' in collection) {                           // setter for whole database
-                privateDB = collection.source;
+                for (let [key,value] of Object.entries(collection.source)) dbase[key] = value;
+                for (let key of Object.keys(dbase)) if (!(key in collection.source)) delete dbase[key];
+                //dbase = collection.source;
             } else {
-                if (ref===null) {
-                    Object.keys(collection).forEach(c => { privateDB[c] = collection[c]; });    // collection setter replace
-                } else {
-                    privateDB.mergekeys(collection);    // collection setter merged with existing collection
-                };
+                Object.keys(collection).forEach(c => {
+                    if (ref===null) {                               // collection merge setter
+                        if (dbase[c] instanceof Array) {
+                            dbase[c] = [...dbase[c],...collection[c]];
+                        } else {
+                            dbase.mergekeys(collection);
+                        };
+                    } else {
+                        dbase[c] = collection[c];                   // replace existing collection
+                    };
+                });
             };
-            return privateDB;
+            return dbase;
         };
-        
-        // single entry change
+        if (ref===undefined) return dbase[collection];              // return the collection (or schema)
+        if (ref==='$') {                                            // replace entire collection
+            dbase[collection] = value;
+            return dbase[collection];
+        };
+        if (ref==='@') {                                            // replace entire collection
+            dbase[collection] = dbase[collection].concat(value);    // append array of entries to collection
+            return dbase[collection];
+        };
+        // schema object is not an array; note no schema ref getter, use this.db('_')[ref] syntax
+        if (collection==='_') {
+            if (ref===null) return undefined;                       // not allowed
+            dbase[collection][ref] = value;                         // schema setter
+            return dbase[collection][ref];                          // return the schema value (or undefined)
+        };
+        // single entry change of collection
         if (ref===null) {
-            privateDB[collection].push(value);          // new entry
-        } else if (value===undefined) {
-            privateDB[collection].splice(ref,1);        // empty record, delete entry
-        } else {
-            privateDB[collection][ref] = value;         // update entry
+            if (value===undefined) return undefined;                // not allowed
+            dbase[collection].push(value);                          // new entry
+            return dbase[collection][-1];
         };
-        return privateDB[collection][ref];
+        if (value===undefined) {                                    // empty record, delete entry
+            if (dbase[collection] instanceof Array) dbase[collection].splice(ref,1);
+            return undefined
+        };
+        dbase[collection][ref] = value;                             // update entry
+        return dbase[collection][ref];
     };
+};
 
+
+function jxDB(def={},data) {
+    // default database definition; '_' collection holds cfg (i.e. schema)...
+    let dbx = {'_':{}, recipes:[]}.mergekeys(data || {});       // temp dbx, data only used for new databases
+    this.file = def.file || '_memory_';
+    let exists = this.file!=='_memory_' && fs.existsSync(this.file);
+    if (exists) {
+        try {
+            let source = fs.readFileSync(this.file,'utf8');
+            dbx = JSON.parse(source);
+        } catch (e) { throw `ERROR reading existing database ${this.file}: ${e}`};
+    };
+    // override with configuration...
+    let schema = {
+        format: def.format || dbx['_'].format || 'tabular',     // storage: pretty, tabular, packed
+        delay: def.delay!==undefined ? def.delay : 
+          dbx['_'].delay!==undefined ? dbx['_'].delay : 2000,   // changed write delay, default 1000ms
+        readOnly: def.readOnly || dbx['_'].readOnly || false,   // flag to inhibit changes
+        file: this.file,                                        // for reference only
+        tag: def.tag || dbx['_'].tag || 'DB',                   // for reference only
+        auth: def.auth || dbx['_'].auth || ''                   // auth for DB (PATCH) operations; ''==admin
+    };
+    dbx['_'].mergekeys(schema);
+    this.db = dbWrapper.call(this,dbx);                         // wrapper for private data interface
+
+    this.scribble = Scribe(def.tag||'db');                      // transcripting reference
+
+    // file watch and reloading; blocks during saving; implements the save timeout...
+    this.watcher = (function(){
+        let watch = { self: this, fileWatch: null, reloading: false, saving: false, tag: schema.tag, timex: null, wait: dbx['_'].delay };
+        if ((def.watch!==false) && (this.file!=='_memory_') && exists) {
+            watch.fileWatch = fs.watch(watch.self.file,evt=>{
+                if (evt=='change') {
+                    if (watch.saving || watch.reloading) return;
+                    watch.reloading = true;
+                    watch.self.reload().then(x=>{ watch.reloading=false; }).catch(e=>{});
+                };
+            });
+            this.scribble.note(`Watching database '${def.tag||this.file}' for changes`);
+        };
+        return function(action) {
+            if (typeof action==='object') {
+                watch.mergekeys(action);
+            } else if (action==='save') {
+                watch.saving = true;
+                clearTimeout(watch.timex);
+                watch.timex = setTimeout(()=>{watch.self.save.call(watch.self);},watch.wait);
+            } else if (action==='resume') {
+                watch.saving = false;
+                watch.timex = null;
+            }
+            return watch;
+        }
+    }).call(this);    //IIFE
     this.scribble.debug(`Database ${def.tag} successfully initialized...`);
 };
 
 // re-load database file into memory.
 jxDB.prototype.reload = async function reload() {
-    try {    
+    try {
         let source = await fsp.readFile(this.file,'utf8');
         this.db({source: JSON.parse(source)});  // jumps to error on parsing failure
-        this.scribble.info(`jxDB.load successful: ${this.file}`);
-    } catch (e) { this.scribble.warn(`jxDB.load failed: ${this.file} --> ${e.toString()}`) };
+        this.scribble.info(`jxDB.reload successful: ${this.file}`);
+    } catch (e) { this.scribble.warn(`jxDB.reload failed: ${this.file} --> ${e.toString()}`) };
 };
 
-// watch for external changes
-jxDB.prototype.watchDB = function watchDB(enable) {
-    if (this.watchInhibited) return;
-    if (!enable) return this.watcher ? this.watcher.close() : null;
-    let self = this;
-    let watchWait = null;
-    this.watcher = fs.watch(this.file,evt=>{
-        if (self.watchInhibited) return;
-        if (evt=='change') {
-            clearTimeout(watchWait);
-            watchWait = setTimeout(function(){self.reload().then(x=>{ self.watchInhibited = false; }).catch(e=>{});}, 500);
-        };
-    });
+// wrapper to alter readOnly flag.
+jxDB.prototype.readOnly = function readOnly(flag) {
+    if (flag!==undefined) this.schema('readOnly',!!flag);
+    return this.schema('readOnly');
 };
 
 // save the database 
@@ -127,36 +172,42 @@ jxDB.prototype.save = function save() {
         let trailer = (n) => `  ${tArray(n) ? ']':'}'},\n`;
         let jx = '{\n';
         tables.forEach(n=>{
+            t = db[n];
             jx += leader(n);
             if (tArray(n)) {
-                let items = db[n].map(i=>`    ${JSON.stringify(i)}`);
+                let items = t.map(i=>`    ${JSON.stringify(i)}`);
                 jx += items.join(',\n') + '\n';
             } else {
-                let rows = Object.keys(db[n]).map(k=>`    "${k}": ${JSON.stringify(db[n][k])}`);
+                let rows = Object.keys(t).filter(k=>t[k]!==undefined).map(k=>`    "${k}": ${JSON.stringify(t[k])}`);
                 jx += rows.join(',\n') + '\n';
             };
             jx += trailer(n);
         });
-        return jx.slice(0,-2) + '\n}';
+        return jx.slice(0,-2) + '\n}';  // strip trailing comma and newline and add back newline
     };
-    if ((this.file=='_memory_') || this.readOnly()) return;
-    if (this.watcher) this.watchInhibited = true;
-    let frmt = this.db()['_'].format;
+    if ((this.file==='_memory_') || this.readOnly()) return;
+    this.watcher({saving:true}); // this needs to be set if save function called directly
+    let frmt = this.schema('format');
     var data = frmt=='tabular' ? tabulate(this.db()) : JSON.stringify(this.db(),null,frmt=='pretty'?2:undefined);
-    fsp.writeFile(this.file,data)
+    fsp.writeFile(this.file,data,'utf8')
+        .then(x=>{ this.watcher('resume'); })
         .then(x=>{ this.scribble.trace(`jxDB.save successful: ${this.file}`); })
-        .then(x=>{if (this.watcher) this.watchInhibited = false; this.timex = null; })
         .catch(e=>{ this.scribble.error(`jxDB.save failed: ${this.file} --> ${e.toString()}`); });
+};
+
+// set or return schema
+jxDB.prototype.schema = function schema(key,value) { 
+    if (key===undefined) return Object.assign({},this.db('_'));
+    if (value===undefined) return this.db('_')[key];
+    this.db('_',key,value);
+    return value;
 };
 
 // queue the database to be saved...
 jxDB.prototype.changed = function changed() {
-    clearTimeout(this.timex);
-    this.timex = setTimeout(()=>{this.save();},this.db()['_'].delay);
+    if (this.readOnly() || this.file==='_memory_') return;
+    this.watcher('save');
 };
-
-// set or return schema
-jxDB.prototype.schema = function schema(s) { if (s) this.db()['_'] = s; return Object.assign({},this.db()['_']); };
 
 // returns a list of currently defined collection names...
 jxDB.prototype.collections = function collections() { return Object.keys(this.db()).filter(k=>k!='_'); };
@@ -170,17 +221,23 @@ jxDB.prototype.lookup = function lookup(recipeName) {
 // recipeSpec defines recipe.name or actual recipe object
 // bindings represent optional recipe expression substitutions or null
 // returns data or undefined (no recipe) or null, but never error condition...
-jxDB.prototype.query = function query(recipeSpec, bindings=null) {
+jxDB.prototype.query = function query(recipeSpec, bindings=null, user={}) {
     let recipe = typeof recipeSpec=='string' ? this.lookup(recipeSpec) : recipeSpec; // pass recipe object or name
-    let dflt = recipe.defaults!==undefined ? recipe.defaults : {};
     if (!recipe.expression) {   // precheck verifies required recipe fields...
-        this.scribble.trace("jxDB.query ERROR: bad recipe precheck -- no expression!:",printObj(recipeSpec)); 
-        return dflt;      
+        this.scribble.trace("jxDB.query ERROR: bad recipe precheck -- no expression!:",print(recipeSpec)); 
+        throw {code: 500, detail: "jxDB.query ERROR: bad recipe precheck -- no expression!:"};      
     };
+    // prep params... defaults (recipe.bindings) and/or query bindings may or may not be defined
+    let params = recipe.bindings!==undefined ? Object.assign({},recipe.bindings) : null;
+    if (bindings) params = params ? params.mergekeys(bindings) : bindings;
+    if (params) params = jxSafe(params,recipe.scrub||'*');
+    params = params ? params.mergekeys({_: user}) : {_: user};
+    this.scribble.trace(`jxDB.query[${recipe.name}] params: ${print(params,60)}`);
     try {
-        let tmp = jsonata(recipe.expression).evaluate(this.db(),bindings);
-        if (verifyThat(tmp,'isNotDefined')) return dflt;
-        tmp = jxCopy(tmp);  // workaround -> returns by reference without this!
+        let tmp = jsonata(recipe.expression).evaluate(this.db(),params);
+        if (verifyThat(tmp,'isNotDefined')) return recipe.dflt||null;
+        // workaround -> jsonata returns by reference so need to deepcopy to prevent corrupting database!
+        tmp = typeof tmp==='object' ? (tmp instanceof Array ? [] : {}).mergekeys(tmp) : tmp;
         if (tmp instanceof Array) {
             let lmt = recipe.limit || 0;
             if (lmt && (tmp.length>Math.abs(lmt))) tmp = (lmt<0) ? tmp.slice(lmt) : tmp.slice(0,lmt);
@@ -189,7 +246,7 @@ jxDB.prototype.query = function query(recipeSpec, bindings=null) {
         return tmp;
     } catch (e) {
         this.scribble.log(`jxDB.query ERROR: ${typeof e=='object'?e.message:e.toString()}`); 
-        return dflt;
+        return recipe.dflt||null;
     };
 };
 
@@ -201,64 +258,68 @@ jxDB.prototype.query = function query(recipeSpec, bindings=null) {
 //   record refers to data to be saved, undefined/null to delete record; 
 //   note: update performs a full record replacement after merge with defaults and existing record,
 // returns array of acctions taken for each entry...
-jxDB.prototype.modify = function modify(recipeSpec, data) {
+jxDB.prototype.modify = function modify(recipeSpec, data, user={}) {
     let recipe = typeof recipeSpec=='string' ? this.lookup(recipeSpec) : recipeSpec; // pass recipe object or name
     let results = []; // always an array
-    this.scribble.trace(`MODIFY: ${JSON.stringify(recipe)}`);
+    let result = (a,r,x) =>results.push({action: a, ref: r, detail: x});
+    this.scribble.trace(`MODIFY[${this.schema('tag')||this.schema('file')}]: ${print(recipe,60)}`);
+    this.scribble.trace(`  DATA: ${print(data,60)}`);
+    this.scribble.dump(`MODIFY[${this.schema('tag')||this.schema('file')}]: ${print(recipe,60)} => ${print(data,60)}`);
     if (!recipe.collection || !this.db()[recipe.collection]) {  // precheck verifies required recipe fields...
-        this.scribble.log("jxDB.modify ERROR: bad recipe precheck -- no collection defined!:",printObj(recipeSpec)); 
-        return results;      
+        this.scribble.error("jxDB.modify ERROR: bad recipe precheck -- no collection!:",print(recipeSpec));
+        throw {code: 500, detail: "jxDB.modify ERROR: bad recipe precheck -- no collection!:"};
     };
     if (!verifyThat(data,'isArrayOfAnyObjects')) {
-        this.scribble.trace(`ERROR: modify expects an array of objects: ${printObj(data)}`);
+        this.scribble.error(`ERROR: modify expects an array of objects: ${print(data)}`);
         return results;
     };
-    try {
-        let defaults = recipe.defaults || {};
-        for (let d of data) {
-            let ref = d.ref || d[0] || null;
-            let record = d.record || d[1] || null;
-            this.scribble.trace(`ref: ${ref}, record: ${printObj(record)}, type: ${typeof record}`);
-            if (ref===null && record===null) {      // bad request if no ref AND no record
-                results.push(["bad",null,null]);   
-            } else {                                // new, update, or delete request
-                let existing = ((ref!==null) && recipe.reference && jsonata(recipe.reference).evaluate(this.db(),{ref:ref})) || 
-                  {index: null, record: defaults};
-                this.scribble.trace(`existing: ${printObj(existing)}`);
-                if (record) {
-                    // a new entry--assumes unique record that does not exist since no reference to lookup 
-                    let newRecord = jxCopy(defaults).mergekeys(existing.record).mergekeys(record);
-                    if (existing.index===null) {    // add new record
-                        // unique should return a unique index value for collection and key it applies to such as id, tag, 0
-                        let unique = recipe.unique ? jsonata(recipe.unique).evaluate(this.db()) : {};
-                        if ('key' in unique) newRecord[unique.key] = unique.value;
-                        this.scribble.trace(`new record: ${printObj(newRecord)}`);
-                        this.db(recipe.collection,null,newRecord);
-                        results.push(["add",unique.value||null,this.db()[recipe.collection].length-1]);
-                    } else {  // change existing record
-                        this.db(recipe.collection,existing.index,newRecord);
-                        this.scribble.trace(`change record: ${printObj(newRecord)}`);
-                        results.push(["change",ref,existing.index]);
-                    };
-                } else {    // no record, so delete index
-                    if (existing.index!==null) {    // existing record was found
-                        this.db(recipe.collection,existing.index); // delete record
-                        this.scribble.trace(`delete record: ${existing.index}`);
-                        results.push(["delete",ref,existing.index]);
-                    } else {
-                        this.scribble.trace(`nop: ${ref}`);
-                        results.push(["nop",ref,null]);   // delete non-existing record?
-                        continue;
-                    };
+    for (let d of data) {
+        try {
+            let ref = d.ref||d[0]||null;
+            let record = d.record||d[1]||null;
+            this.scribble.trace(`ref: ${ref}, record: ${print(record).substring(0,20)}, see ${this.scribble.file} for details`);
+            this.scribble.dump(`ref: ${ref}, record: ${print(record)}`);
+            if ((ref===null) && (record===null)) { result("bad request",null,null); continue; };    // bad request if no ref AND no record
+            let existing = (ref!==null) && recipe.query && jsonata(recipe.query).evaluate(this.db(),{ref:ref}) ||
+                { index: null, record: null };
+            this.scribble.trace(`existing: ${existing.index!==null}`);
+            if (record) {
+                if (existing.index===null) { // add new record, which may have a defined ref or ref: null...
+                    let newRecord = recipe.entry instanceof Array ? record : jxCopy(recipe.entry||{}).mergekeys(record);
+                    // unique should return a unique index value for collection and key value applies to, such as id, tag, 0
+                    let unique = recipe.unique ? jsonata(recipe.unique).evaluate(this.db()) : {};
+                    if ('key' in unique) { ref=ref||unique.value, newRecord[unique.key] = newRecord[unique.key] || unique.value; };
+                    let safeNewRecord = jxSafe({ref: ref, record: newRecord},recipe.filter||'*');
+                    this.scribble.dump(`jxDB.modify[new ${recipe.name}]: ${print(safeNewRecord)}}`);
+                    this.scribble.trace(`jxDB.modify[new ${recipe.name}]: ${print(safeNewRecord,60)}}`);
+                    this.db(recipe.collection,null,safeNewRecord.record);
+                    result("added",safeNewRecord.ref,this.db(recipe.collection).length-1);
+                } else {    // change existing record...
+                    let chgRecord = recipe.entry instanceof Array ? record : {}.mergekeys(existing.record).mergekeys(record);
+                    let safeRecord = {index: existing.index}.mergekeys(jxSafe({ref: ref, record: chgRecord},recipe.filter||'*'));
+                    this.scribble.dump(`jxDB.modify[chg ${recipe.name}]: ${print(safeRecord)}}`);
+                    this.scribble.trace(`jxDB.modify[chg ${recipe.name}]: ${print(safeRecord,40)}}`);
+                    this.db(recipe.collection,existing.index,safeRecord.record);
+                    result("changed",ref,existing.index);
                 };
-                this.changed(); // flag changes for save
+            } else {    // no record given...
+                if (existing.index!==null) {    // existing record was found, so delete index
+                    this.db(recipe.collection,existing.index); // delete record
+                    this.scribble.trace(`delete record: ${existing.index}`);
+                    result("deleted",ref,existing.index);
+                } else {    // existing entry not found means nothing to do
+                    this.scribble.trace(`JXDB NOP: ref: ${ref}, record: ${print(record,{max:40})}`)
+                    result("nop",ref,null);   // delete non-existing record?
+                };
             };
+        } catch(e) { 
+            let msg = typeof e=='object' ? e.message:e.toString();
+            this.scribble.dump("jxDB.modify ERROR: ",e); 
+            this.scribble.error("jxDB.modify ERROR: ",msg); 
+            result('error',ref,msg);
         };
-    } catch(e) { 
-        let msg = typeof e=='object' ? e.message:e.toString(); 
-        this.scribble.error("jxDB.modify ERROR: ",msg); 
-        results.push(['error',ref,msg])
     };
+    if (results.some(r=>r.action!=="nop")) this.changed(); // flag changes for save
     return results; // array of actions and references for each data record.
 };
 
