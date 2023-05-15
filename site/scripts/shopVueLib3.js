@@ -16,7 +16,7 @@ const shopLib = {
             inventory: [['Inventory','IV']],
             sets: SITE.locations,
             setsLabels: {},
-            stocks: { IV: [['Main Stock', '$1'],['Aux Stock', '$2']] },
+            stocks: { IV: [['Fox Ridge', '$1'],['Mesa View', '$2'],['Home', '$3']] },
             unitsInfo: { by:{}, keys:{} }
             }
             shop.sets = shop.sets.concat(shop.inventory);
@@ -80,22 +80,24 @@ const shopLib = {
                 }
             },
             methods: {
-                chgField(field) {
-                    let opt = document.createElement("option");
-                    opt.value = this[field].value;
-                    opt.text = this[field].value;
-                    this.$refs[field].add(opt,null);
-                    this.$refs[field+'Filter'].add(opt,null);
+                addCatalog(field) {
+                    let fieldList = {category:'categories', supplier:'suppliers'}[field];
+                    if (!this.catalog[fieldList].includes(this[field].value)) this.catalog[fieldList].push(this[field].value);
                     this[field].add = false;
-                    return this.field.value;
+                    return this[field].value;
                 },
                 chgFltr() { this.chgIdx(0); },
+                cmpItem() { 
+                    let equal = (f) => JSON.stringify(this.item[f])===JSON.stringify(this.original[f]); 
+                    this.item.pending = this.catalog.fields.some(f=>!equal(f)) || 
+                        !!(this.category.add && this.category.value) || !!(this.supplier.add && this.supplier.value);
+                    return this.item.pending;
+                },
                 chgIdx(x) {
-                    if (this.item.id===this.catalog.items[this.filteredIndexes[x]]?.id) return;
-                    if (this.category.add && this.category.value) this.item.category = this.chgField('category');
-                    if (this.supplier.add && this.supplier.value) this.item.supplier = this.chgField('supplier');
-                    let equal = (f) => JSON.stringify(this.item[f])===JSON.stringify(this.original[f]);
-                    this.item.chgd = this.item.chgd || this.catalog.fields.some(f=>!equal(f));
+                    //if (this.item.id===this.catalog.items[this.filteredIndexes[x]]?.id) return;
+                    if (this.category.add && this.category.value) this.item.category = this.addCatalog('category');
+                    if (this.supplier.add && this.supplier.value) this.item.supplier = this.addCatalog('supplier');
+                    this.item.chgd = this.item.chgd || this.cmpItem();
                     if (this.item.chgd) this.$emit('item',this.fixFlags(this.item));
                     // new fIdx...
                     this.fIdx = this.filteredIndexes.length===0 ? null :                    
@@ -121,6 +123,10 @@ const shopLib = {
                         .then(res=>{ return res.jxOK&&!res.jx.error ? res.jx : []; })
                         .then(result=>{ this.imgRpt = result[0]; })
                         .catch(e=>console.error("imgUpload:",e));
+                },
+                toggle(x) {
+                    this[x].add = !this[x].add;
+                    this.cmpItem();
                 }
             },
             template: /*html*/`
@@ -163,8 +169,8 @@ const shopLib = {
                             <i v-icon:backspace class="text-icon" @click="chgSearchText()"></i>
                         </div>
                     </div>
-                    <h5>Selected Item: <span v-show="item.chgd" class="text-bold">CHANGED</span></h5>
-                    <div class="catalog-grid" v-if-class:text-alt="item.chgd">
+                    <h5>Selected Item: <span v-show="item.chgd||item.pending" class="text-bold">CHANGED</span></h5>
+                    <div class="catalog-grid" v-if-class:text-alt="item.chgd||item.pending">
                         <div class="catalog-grid-c1">ID# (index):</div>
                         <div class="catalog-grid-c2 justify-center">
                             <button class="left" type="button" @click="chgIdx('previous')">Previous</button>
@@ -173,37 +179,36 @@ const shopLib = {
                         </div>
                         <div class="catalog-grid-c1">Item:</div>
                         <div class="catalog-grid-c2 stretch">
-                            <input class="fit" type="text" v-model="item.item" pattern="[^\\/\\\\<>]+" placeholder="Item name..." />
+                            <input class="fit" type="text" v-model="item.item" placeholder="Item name..." @input="cmpItem"/>
                         </div>
                         <div class="catalog-grid-c1">Category:</div>
                         <div class="catalog-grid-c2">
-                            <select ref="category" v-show="!category.add" v-model=item.category>
-                                <option v-for="c in catalog.categories" :value="c">{{c}}</option>
+                            <select ref="category" v-show="!category.add" v-model=item.category @change="cmpItem">
+                                <option v-for="c in catalog.categories" :selected="c===item.category" :value="c">{{c}}</option>
                             </select>
-                            <input type="text" v-show="category.add" v-model="category.value" pattern="[A-Za-z]+" 
+                            <input type="text" v-show="category.add" v-model="category.value" 
                                 @input="chgNewCategory" placeholder="New category..." />
-                            <i class="catalog-icon" v-icon="category.add?'do_not_disturb_on':'add_circle'" @click="()=>category.add=!category.add" ></i>
+                            <i class="catalog-icon" v-icon="category.add?'do_not_disturb_on':'add_circle'" @click="toggle('category')" ></i>
                         </div>
                         <div class="catalog-grid-c1">Description:</div>
                         <div class="catalog-grid-c2 stretch">
-                            <input class="fit" type="text" v-model="item.desc" pattern="[^\\/\\\\<>]+" placeholder="Item description..." />
+                            <input class="fit" type="text" v-model="item.desc" placeholder="Item description..." @input="cmpItem"/>
                         </div>
                         <div class="catalog-grid-c1">Note:</div>
                         <div class="catalog-grid-c2 stretch">
-                            <input class="fit" type="text" v-model="item.note" pattern="[^\\/\\\\<>]+" placeholder="Shopping Note..." />
+                            <input class="fit" type="text" v-model="item.note" placeholder="Shopping Note..."  @input="cmpItem"/>
                         </div>
                         <div class="catalog-grid-c1">Supplier:</div>
                         <div class="catalog-grid-c2">
-                            <select ref="supplier" v-show="!supplier.add" v-model=item.supplier>
-                                <option v-for="s in catalog.suppliers" :value="s">{{s}}</option>
+                            <select ref="supplier" v-show="!supplier.add" v-model=item.supplier @change="cmpItem">
+                                <option v-for="s in catalog.suppliers" :selected="s===item.supplier" :value="s">{{s}}</option>
                             </select>
-                            <input type="text" v-show="supplier.add" v-model="supplier.value" pattern="[A-Z a-z]+"
-                                placeholder="New supplier..." />
-                            <i class="catalog-icon" v-icon="supplier.add?'do_not_disturb_on':'add_circle'" @click="()=>supplier.add=!supplier.add" ></i>
+                            <input type="text" v-show="supplier.add" v-model="supplier.value" placeholder="New supplier..." @input="cmpItem" />
+                            <i class="catalog-icon" v-icon="supplier.add?'do_not_disturb_on':'add_circle'" @click="toggle('supplier')" ></i>
                         </div>
                         <div class="catalog-grid-c1">Image:</div>
                         <div class="catalog-grid-c2">
-                            <input type="text" v-model="item.image" placeholder="Item image filename..." />
+                            <input type="text" v-model="item.image" placeholder="Item image filename..." @input="cmpItem" />
                             <i class="catalog-icon" v-icon:image @click="imgRead"></i>
                             <input id="catalog-item-img" class="none" type="file" accept="image/*" />
                         </div>
@@ -224,18 +229,18 @@ const shopLib = {
                         </template>
                         <div class="catalog-grid-c1">Flags:</div>
                         <div class="catalog-grid-c2">
-                            <label v-for="f in SHOP.flags"><input type="checkbox" v-model=item.flags name="itemFlags" :value="f" />
+                            <label v-for="f in SHOP.flags"><input type="checkbox" v-model=item.flags name="itemFlags" :value="f" @change="cmpItem" />
                                 {{f.toTitleCase()}}</label>
                         </div>
                         <div class="catalog-grid-c1">Limit:</div>
-                        <div class="catalog-grid-c2"><input class="text-right" type="number" v-model="item.limit" /></div>
+                        <div class="catalog-grid-c2"><input class="text-right" type="number" v-model="item.limit" @input="cmpItem" /></div>
                         <div class="catalog-grid-c1">Lot Size:</div>
-                        <div class="catalog-grid-c2"><input class="text-right" type="number" v-model="item.lot" /></div>
+                        <div class="catalog-grid-c2"><input class="text-right" type="number" v-model="item.lot" @input="cmpItem" /></div>
                         <div class="catalog-grid-c1 stretch">Lot Cost:<span class="right">$</span></div>
-                        <div class="catalog-grid-c2"><input class="text-right" type="text" v-model="item.cost" pattern="\d+.\d\d" /></div>
+                        <div class="catalog-grid-c2"><input class="text-right" type="text" v-model="item.cost" @input="cmpItem" /></div>
                     </div>
                     <p>{{ chgdCount }} {{pluralize(chgdCount,'item')}} of {{catalog.items.length }} items changed pending save</p>
-                    <button class="right" @click="()=>$emit('save')">Save Calatog Changes</button>
+                    <button class="right" @click="()=>$emit('save')">Save Catalog Changes</button>
                 </div>`
         },
         'shpg-cloud': {
@@ -534,12 +539,13 @@ const shopLib = {
                 list() {
                     // never allow unused items; always allow admin inventory; pass allowed categories; include specialized items
                     let allow = (i) => i.flags.includes('unused') ? false : this.listing.unit.startsWith('$') ? true : 
-                        this.listing.allowed.includes(i.category) ? true : this.listing.special.includes(i.id);
-                    let categories = this.catalog.categories.slice(0);
-                    let groups = {}; categories.forEach(c=>groups[c]=[]);
+                        this.listing.special.includes(i.id) ? true : i.flags.includes('special') ? false : 
+                        this.listing.allowed.includes(i.category);
+                    let groups = this.catalog.categories.reduce((g,c)=>{g[c]=[];return g},{});
+                    console.log('listing:',this.listing);
                     for (let i of this.catalog.items) if (allow(i)) groups[i.category].push(i.index);
-                    let cx = categories.filter(c=>groups[c].length);
-                    let scaling = {}; categories.forEach(c=>scaling[c]=this.listing.scale[c]||1);
+                    let cx = Object.keys(groups).filter(g=>groups[g].length);
+                    let scaling = this.catalog.categories.reduce((s,c)=>{s[c]=this.listing.scale[c]||1; return s},{});
                     return { categories: cx, groups: groups, scaling: scaling };
                 }
             },
@@ -549,8 +555,9 @@ const shopLib = {
                     <p v-show="!permitted">NOT PERMITTED TO SHOP!</p>
                     <div v-if="permitted">
                         <p class="text-large text-center">Due Date: <span class="text-bold">{{ friendlyDate(setup.due) }}</span></p>
-                        <p class="text-large">List for <span class="text-bold">
-                            {{ SHOP.unitsInfo.by[cart.set][cart.unit].unit.label }}</span> at {{ SHOP.setsLabels[cart.set] }}
+                        <p class="text-large">List for 
+                            <span class="text-bolder text-accent-dark">{{ SHOP.unitsInfo.by[cart.set][cart.unit].unit.label }}</span>
+                            at <span class="text-bold text-accent-dark">{{ SHOP.setsLabels[cart.set] }}</span>
                             <i class="text-accent inline-icon" v-icon:help @click="showShoppingHelp=!showShoppingHelp"></i>
                         </p>
                         <span v-show="showShoppingHelp">
@@ -586,7 +593,7 @@ const shopLib = {
                         </p>
                         </span>
                         <toggle-button :init="only" :labels="'Show Cart Items Only,Show All Items'" @state="()=>only=!only"></toggle-button>
-                        <button type="button" @click="()=>xblk='all'">Exapnd All</button>
+                        <button type="button" @click="()=>xblk='all'">Expand All</button>
                         
                         <button type="button" @click="()=>xblk='none'">Collapse All</button>
                         <p v-show="notAllowed" class="text-large text-bolder text-alt">No Shopping List for this cart...</p>
@@ -647,11 +654,12 @@ const shopLib = {
             data: function () { return {
                 setup: this.setups.table[this.sid?this.setups.table.map(s=>s.id).indexOf(this.sid):this.setups.table.length-1],  // setup data...
                 index: this.sid?this.setups.table.map(s=>s.id).indexOf(this.sid):this.setups.table.length-1,    // setup index
-                listing: this.listings.table[0],    // active listing
+                listing: {}.mergekeys(this.listings.table[0]),  // active listing local copy
+                chgdListings: [],
                 set: this.listings.table[0].set,    // listing set
                 tag: this.listings.table[0].unit,   // listing unit tag
                 showSetupHelp: false,
-                showUnitHelp: false
+                showUnitHelp: false,
             }},
             computed: {
                 active() { return this.sid===this.setup.id },
@@ -659,14 +667,30 @@ const shopLib = {
                 special() { return this.catalog.items.filter(i=>i.flags.includes('special')); },
                 today() { return new Date().style('YYYY-MM-DD','local'); },
                 unitLabel() { return (this.units.by[this.tag]||{unit:{label:''}}).unit.label },
-                units() { return { by: this.SHOP.unitsInfo.by[this.set], keys: this.SHOP.unitsInfo.keys[this.set] }; }
+                units() { return { by: this.SHOP.unitsInfo.by[this.set], keys: this.SHOP.unitsInfo.keys[this.set] }; },
             },
             methods: {
                 chgListing() {
-                    this.listing = this.listings.table.filter(l=>l.set==this.set && l.unit==this.tag)[0] ||
-                      { id: null, set: this.set, unit: this.tag, allowed: [], scale: {}, special: [] };
+                    let original = this.listings.table.filter(l=>l.set==this.set && l.unit==this.tag)[0];
+                    let chgd = this.chgdListings.filter(l=>l.set==this.set && l.unit==this.tag)[0];
+                    this.listing = { id: null, set: this.set, unit: this.tag, allowed: [], scale: {}, special: [] }
+                        .mergekeys(chgd ? chgd : original);
                 },
-                chgScale(category, x) { this.listing.scale[category] = (this.listing.scale[category] || 1) + x; },
+                chgdListing(state) { 
+                    this.listing.chgd = state!==false
+                    if (this.listing.chgd) {
+                        //let exists = this.chgdListings.filter(l=>l.set==this.set && l.unit==this.tag)[0];
+                        let exists = this.chgdListings.map((l,i)=>({listing:l,index:i}))
+                            .filter(l=>l.listing.set==this.set && l.listing.unit==this.tag)[0];
+                        if (!exists) {
+                            this.chgdListings.push({}.mergekeys(this.listing))
+                        } else {
+                            this.chgdListings[exists.index] = {}.mergekeys(this.listing);
+                        }
+                        console.log(`chgdListing[${exists?.index}]: ${JSON.stringify(this.listing)}`)
+                    }
+                },
+                chgScale(category, x) { this.listing.scale[category] = (this.listing.scale[category] || 1) + x; this.chgdListing()},
                 chgSet() { this.tag = this.units.keys[0]; this.chgListing(); },
                 chgUnit(x) {
                     let u = this.units.keys;
@@ -677,7 +701,13 @@ const shopLib = {
                     this.index = (x===-1) ? ((this.index===null) ? this.setups.table.length-1 : (this.index===0) ? null : this.index-1) :
                       (x===1) ? ((this.index===null) ? 0 : (this.index===(this.setups.table.length-1)) ? null : this.index+1) : null;
                     this.setup = this.index!==null ? this.setups.table[this.index] : 
-                      { id: null, location: this.setup.location, due: this.today, dtd: this.today };
+                      { id: null, location: this.setup.location, due: this.today, dtd: this.today, stock: [] };
+                },
+                saveListings(){
+                    this.$emit('listing',this.chgdListings);
+                    this.chgdListings = [];
+                    this.chgdListing(false);
+
                 }
             },
             template: /*html*/`
@@ -719,7 +749,7 @@ const shopLib = {
                             </div>
                         </div>
                         <button type="button" @click="$emit('active',setup)">Set As Active</button>
-                        <button type="button" class="right" @click="$emit('setup',setup)">Save Setup</button>
+                        <button type="button" class="right" @click="$emit('setup',setup)">{{setup.id===null?'Save':'Update'}} Setup</button>
                     </div>
                     <hr>
                     <div>
@@ -734,28 +764,33 @@ const shopLib = {
                             selected for each shopping unit by checking the appropriate items.
                         </p>     
                         </span>
-                        <p>Unit Set: 
+                        <p>Unit Set:
                             <label class="flex" v-for="sx of SHOP.sets"><input type="radio" name="listingSet" :checked="sx[1]===set" 
                                 :value="sx[1]" v-model="set" @change="chgSet" />{{sx[0]}}</label>
                         </p>
-                        <p>List for <i class="text-accent icon-button" v-icon:chevron_left @click="chgUnit(-1)"></i>
-                            {{ " "+unitLabel+" " }} (#{{listing.id||'NEW'}})
+                        <p>Listing for <i class="text-accent icon-button" v-icon:chevron_left @click="chgUnit(-1)"></i>
+                            <span class="text-bold text-accent-dark">{{ " "+unitLabel+" " }} (#{{listing.id||'NEW'}})
+                            {{listing.chgd?'*':''}}</span>
                             <i class="text-accent icon-button" v-icon:chevron_right @click="chgUnit(1)"></i>
+                        <button type="button" class="right" :disabled="chgdListings.length===0" @click="saveListings">Save Listings</button>
                         </p>
 
                         <h5>Categories</h5>
                         <div class="text-indent" v-for="c of categories">
                             <i class="text-accent icon-button" v-icon:remove @click="chgScale(c,-1)"></i> {{listing.scale[c]||1}} 
                             <i class="text-accent icon-button" v-icon:add @click="chgScale(c,1)"></i>
-                            <label class="inline"><input type="checkbox" name="listingAllowed" :value="c" v-model="listing.allowed" /> {{c}}</label><br>
+                            <label class="inline"><input type="checkbox" name="listingAllowed" :value="c" v-model="listing.allowed" 
+                                @change="chgdListing"/> {{c}}</label><br>
                         </div>
 
                         <h5>Specialty Items</h5>
                         <div class="text-indent" v-for="s of special">
-                            <label class="setting-special-item"><input type="checkbox" name="listingSpecial" :value="s.id" v-model="listing.special" />
-                            {{s.item}} #{{s.id}}<br><span class="setting-special-desc">{{s.desc}}</span></label><br>
+                            <label class="setting-special-item"><input type="checkbox" name="listingSpecial" :value="s.id" 
+                                v-model="listing.special" @change="chgdListing"/>
+                                {{s.item}} #{{s.id}} ({{s.category}})<br>
+                                <span class="setting-special-desc">{{s.desc}}</span>
+                            </label><br>
                         </div>
-                        <button type="button" class="right" @click="$emit('listing',listing)">Save Listing</button>
                     </div>
                 </div>`
         },
@@ -873,21 +908,26 @@ const shopLib = {
             props: ['carts', 'catalog', 'setup'],
             computed: {
                 tally() {
-                    let tx = { ids: [], items: {}, quan: [], stock: [], categories: {}, suppliers: [], cost: {} };
+                    let tx = { ids: [], items: {}, quan: [], stock: [], units:[], categories: {}, suppliers: [], cost: {} };
                     // tally shopping carts before stock...
                     this.carts.table.filter(cx=>!cx.unit.startsWith('$')).forEach(c=>{
                         c.items.forEach(i=>{
                             let [ id,quan ] = i;
-                            if (!tx.ids.includes(id)) { tx.ids.push(id); tx.stock.push(0); tx.quan.push(0); };
+                            if (!tx.ids.includes(id)) { tx.ids.push(id); tx.units.push([]), tx.stock.push(0); tx.quan.push(0); };
                             tx.quan[tx.ids.indexOf(id)] += quan;
+                            let ulbl = this.SHOP.unitsInfo.by[this.setup.location][c.unit].unit.label;
+                            tx.units[tx.ids.indexOf(id)].push({unit: ulbl, quan:quan});
                         })
                     })
+                    // tally inventory...
                     this.carts.table.filter(cx=>cx.unit.startsWith('$')&&this.setup.stock.includes(cx.unit)).forEach(c=>{
                         c.items.forEach(i=>{
                             let [ id,quan ] = i;
-                            if (tx.ids.includes(id)) tx.stock[tx.ids.indexOf(id)] += Math.abs(quan);  // only add stock for shopping items
+                            // only include inventory for requested items found in carts about...
+                            if (tx.ids.includes(id)) tx.stock[tx.ids.indexOf(id)] += quan;
                         })
                     })
+                    // compute purchases...
                     this.catalog.items.filter(ci=>tx.ids.includes(ci.id)).forEach(i=>{
                         let index = tx.ids.indexOf(i.id);
                         let buy = Math.ceil(tx.quan[index] > tx.stock[index] ? (tx.quan[index]-tx.stock[index])/(i.lot||1) : 0);
@@ -895,27 +935,32 @@ const shopLib = {
                             if (!tx.suppliers.includes(i.supplier)) { tx.suppliers.push(i.supplier); tx.categories[i.supplier]=[]; 
                                 tx.items[i.supplier]={}; tx.cost[i.supplier]=0; };
                             if (!tx.categories[i.supplier].includes(i.category)) { tx.categories[i.supplier].push(i.category); tx.items[i.supplier][i.category]=[] }
-                            tx.items[i.supplier][i.category].push({item: i, buy: buy});
+                            let unitsList = tx.units[index].map(x=>`${x.unit}:${x.quan}`).join(', ');
+                            tx.items[i.supplier][i.category].push({item:i,buy:buy,stock:tx.stock[index],utally:unitsList});
                             tx.cost[i.supplier] += buy * i.cost;
                         };
                     })
+                    // aggregate supplier costs...
+                    tx.cost.total = Object.keys(tx.cost).reduce((t,s)=>t+tx.cost[s],0);
                     return tx;
                 }
             },
             template: /*html*/`
                 <div id="shpg-suppliers" class="shpg-suppliers">
                     <h3>Supplier Lists...</h3>
+                    <h4 class="text-indent2">Aggregate Total: {{as$(tally.cost.total)}}</h4>
                     <div class="supplier-list shop-new-page shop-break" v-for="s of tally.suppliers">
                         <h4>{{ s }}</h4>
                         <div class="supplier-category" v-for="c of tally.categories[s]">
                             <h5>{{ c }}</h5>
                             <div class="supplier-grid">
-                                <template v-for="{item,buy} in tally.items[s][c]">
+                                <template v-for="{item,buy,stock,utally} in tally.items[s][c]">
                                 <span class="supplier-grid-c1">{{ buy }}</span>
                                 <span class="supplier-grid-c2">
                                     <span class="text-small shop-badge">{{item.id}}</span>{{ item.item }}<br>
-                                    <span class="text-small text-faded">{{item.desc}}</span>
+                                    <span class="text-small text-faded">{{item.desc}} LOT:{{item.lot}}</span>
                                     <span class="text-small text-italic" v-if="item.note"><br>NOTE: {{ item.note }}</span>
+                                    <span class="text-small text-alt"><br>IV: {{stock}}; {{utally}}</span>
                                 </span>
                                 </template>
                             </div>

@@ -12,21 +12,21 @@ function orderBy(keys,invert=false) {   // closure
         };
 const defaults = {
     cart: { active: { id:null, items: [], notes:'', unit: '' }, fields: [], loaded: false },
-    listing: { active: { allowed: [], scale: {}, special: [] }, fields: [], loaded: false },
-    setup: { active: { location: 'FR', stock: ['$1']}, fields: [], loaded: false }
+    listing: { active: { id: null, set:'', unit: '', allowed: [], scale: {}, special: [] }, fields: [], loaded: false },
+    setup: { active: { id:0, location: 'FR', stock: ['$1']}, fields: [], loaded: false }
 };
 
 // define a single shopping app...
 const shop = Vue.createApp({
     data: function() { return {
         cart: {}.mergekeys(defaults.cart),
-        carts: { completed: true, fields: [], raw: [], table: [], loaded: false },
+        carts: { completed: false, fields: [], raw: [], table: [], loaded: false },
         catalog: { categories: [], fields: [], items: [], raw: [], suppliers: [], loaded: false },
         contacts: { loaded: false, names: {}, raw: {}, usernames: [], usernamesOrderedByName: [] },
         dialog: '',
         group: 'all',
         listing: {}.mergekeys(defaults.listing),
-        listings: { fields: [], by: {}, raw: [], table: [], loaded: false },
+        listings: { fields: [], by: {}, permitted: {}, raw: [], table: [], loaded: false },
         menu: {
             saranam: {label:'Saranam Home', href: 'https://saranamabq.org', target:'_newtab'}
         },
@@ -135,7 +135,7 @@ const shop = Vue.createApp({
                     let cc = {};
                     carts.fields.map((f,i) => cc[f]=c[i]);
                     carts.all.push(cc);
-                    if (cc.setup===carts.setup.id || (cc.setup==0&&stock.includes(cc.unit))) carts.table.push(cc);
+                    if (cc.setup===carts.setup.id || (cc.setup==0&&stock&&stock.includes(cc.unit))) carts.table.push(cc);
                 };
                 return carts;
             };
@@ -173,9 +173,9 @@ const shop = Vue.createApp({
         },
         loadListing() {
             function prepListing(lx) {
-                let a = { id: null, set: location, unit: unit, allowed: [], scale: {}, special: [] };
-                if (lx.length>1) lx[0].map((f,i)=>a[f]=lx[1][i]);
-                return { active: a, fields: lx[0], loaded: true };
+                let lstng = {}.mergekeys(defaults.listing).mergekeys({active:{set:location,unit:unit},fields:lx[0], loaded: true});
+                if (lx.length>1) lstng.fields.map((f,i)=>lstng.active[f]=lx[1][i]);
+                return lstng;
             };
             let { location, unit } = this.user.other;
             this.fetchJSON('GET',`/$listing/${location}/${unit}`,{headers:{authorization: `Bearer ${this.user.token}`}})
@@ -202,14 +202,15 @@ const shop = Vue.createApp({
         },
         loadSetup() {
             function prepSetup(s) {
-                let ss={}.mergekeys(defaults.setup);
-                if (s.length>1) s[0].map((f,i)=>ss[f]=s[1][i]||'');
-                return { active: ss, fields: s[0], loaded: true };
+                let active = {}.mergekeys(defaults.setup.active).mergekeys({location: loc})
+                if (s.length>1) s[0].map((f,i)=>active[f]=s[1][i]||'');
+                return { active: active, fields: s[0], loaded: true };
             };
-            this.fetchJSON('GET','/$setup/'+this.user.other.location,{headers:{authorization: `Bearer ${this.user.token}`}})
+            let loc = this.user.other.location
+            this.fetchJSON('GET','/$setup/'+loc,{headers:{authorization: `Bearer ${this.user.token}`}})
                 .then(res=>{ let s = res.jxOK&&!res.jx.error ? res.jx : []; this.setup = prepSetup(s); })
                 .then(x=>{ if (this.setup.active.id) this.loadCart(); })
-                .then(x=>{ if (this.setup.active.id && this.shopper) this.loadCarts(); })
+                .then(x=>{ if (this.shopper) this.loadCarts(); })
                 .catch(e=>console.error("loadSetup:",e));
         },
         loadSetups() {
@@ -223,7 +224,7 @@ const shop = Vue.createApp({
                 let today = new Date().style('YYYY-MM-DD','local');
                 return sss;
             };
-            this.fetchJSON('GET','/$setups/6',{headers:{authorization: `Bearer ${this.user.token}`}})
+            this.fetchJSON('GET','/$setups/8',{headers:{authorization: `Bearer ${this.user.token}`}})
                 .then(res=>{ let s = res.jxOK&&!res.jx.error ? res.jx : []; this.setups = prepSetups(s); })
                 .catch(e=>console.error("loadSetups:",e));
         },
@@ -279,8 +280,11 @@ const shop = Vue.createApp({
             let data = [ { ref: record.id, record: this.cart.fields.map(f=>record[f]) } ];
             this.cart.active = record;
             this.fetchJSON('POST','/$cart',{body: data, headers:{authorization: `Bearer ${this.user.token}`}})
-                .then(res=>{ let action = res.jxOK&&!res.jx.error ? res.jx : []; console.log('cartSave:',action); })
-                .catch(e=>console.error("saveCart:",e));
+            .then(res=>res.jxOK&&!res.jx.error ? res.jx : [])   // always returns an array
+            .then(result=>result[0]||{})    // first array or empty object
+            .then(result=>{ if (result.action==='added') this.cart.active.id=result.ref; return result; })
+            .then(result=>{ console.log('cartSave:',result, this.cart.active.id); })
+            .catch(e=>console.error("saveCart:",e));
         },
         saveFile(what,data) {
             let url = what==='catalog' ? '/$catalog' : what==='image' ? '/~pics' : null;
@@ -290,12 +294,12 @@ const shop = Vue.createApp({
                 .then(res=>{ console.log('saveFile:', res.jxOK&&!res.jx.error ? res.jx : []); })
                 .catch(e=>console.error("saveFile:",e));
         },
-        saveListing(listing) {
-            let data = [{ ref: listing.id, record: this.listing.fields.map(f=>listing[f]) }];
+        saveListings(listings) {
+            let data = listings.map(lst=>({ ref: lst.id, record: this.listings.fields.map(f=>lst[f]) }));
             this.fetchJSON('POST','/$listing',{body: data, headers:{authorization: `Bearer ${this.user.token}`}})
-                .then(res=>{ let action = res.jxOK&&!res.jx.error ? res.jx : []; console.log('setupSave:',action); })
+                .then(res=>{ let action = res.jxOK&&!res.jx.error ? res.jx : []; console.log('saveListings:',action); })
                 .then(x=>{ this.loadListings(); })
-                .catch(e=>console.error("saveListing:",e));
+                .catch(e=>console.error("saveListings:",e));
         },
         saveSetup(setup) {
 console.log('setup:',setup)

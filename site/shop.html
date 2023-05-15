@@ -82,7 +82,7 @@
               @completed="(c)=>carts.completed=c" @group="chgGroup" @quan="chgQuantity" @save="saveCart"></shpg-list>
 
             <shpg-setup v-if="ready.setup" v-show="view=='setup'" :catalog="catalog" :listings="listings" :setups="setups"
-              :sid="setup.active.id" @active="chgActiveSetup" @listing="saveListing" @setup="saveSetup"></shpg-setup>
+              :sid="setup.active.id" @active="chgActiveSetup" @listing="saveListings" @setup="saveSetup"></shpg-setup>
 
             <shpg-suppliers v-if="ready.lists" v-show="view=='suppliers'" :carts="carts" :catalog="catalog" 
               :setup="setup.active"></shpg-suppliers>

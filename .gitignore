@@ -5,3 +5,6 @@ bin/x*.js
 *workspace
 bin/convert*.js
 shack
+site/*
+test*
+*.log

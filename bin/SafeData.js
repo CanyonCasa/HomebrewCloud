@@ -84,10 +84,20 @@ function jsonSafe(jx,filter,verbose) {
   } else {
     if (jx==null) return jx;  // null never filtered
     // assume object input...
-    // use keys of respective filter item for checks, extra jx keys not in filter are removed!
     var jxo = {};
-    for (var k in filter) jxo[k] = jsonSafe(jx[k],filter[k],verbose);
-    return jxo;    
+    if (typeof(filter)==='string' && filter.includes(":")) {  // assume simple key value checks for each input field
+      var fltrs = filter.split(":");
+      for (var k in jx) {
+        var fk = scalarSafe(k,fltrs[0],verbose);
+        if (fk && jx[fk] && typeof(jx[fk]!=='object')) {
+          var fv = scalarSafe(jx[fk],fltrs[1],verbose);
+          if (fv) jxo[fk] = fv;
+        }
+      }
+    } else { // use keys of respective filter item for checks, extra jx keys not in filter are removed!
+      for (var k in filter) jxo[k] = jsonSafe(jx[k],filter[k],verbose); 
+    }
+    return jxo; 
   };
 };
 

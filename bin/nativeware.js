@@ -91,8 +91,9 @@ nativeware.account = function account(options={}) {
     let usersDB = this.db.users;
     scribble.info(`Account nativeware initialized for route ${options.route} ...`);
     return async function accountMW(ctx) {
-        let manager = ctx.authorize('admin,manager');       // authenticated admin or manager
         let { action, user, opts } = ctx.request.params;
+        let manager = ctx.authorize('admin,manager');       // authenticated admin or manager
+        let rauth = usersDB.lookup(action).auth || 'admin'; // recipe specific auth or default to admin
         scribble.trace(`user[${ctx.request.method}]: ${print(ctx.args)}`);
         if (ctx.verbIs('get')) {
             switch (action) {
@@ -116,14 +117,19 @@ nativeware.account = function account(options={}) {
                     return await grant.call(self,ctx);
                     break;
                 case 'groups':      // GET /user/groups
-                case 'users':       // GET /user/users
-                    if (!manager) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
+                    if (!ctx.authorize(rauth)) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
+                    return usersDB.query('groups');
+                 case 'users':       // GET /user/users
+                    if (!ctx.authorize(rauth)) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
+                    return usersDB.query('users',{ref:user||'.+'});
                 case 'contacts':    // GET /user/contacts
-                    if (!ctx.authorize('contacts')) { scribble.warn(`Contacts authorization required: ${action}`); throw 401; };
+                    if (!ctx.authorize(rauth)) { scribble.warn(`Contacts authorization required: ${action}`); throw 401; };
+                    return usersDB.query('contacts',{ref:user||'.+'});
                 case 'names':       // GET /user/names
-                    if (!ctx.authenticated) { scribble.warn(`Authorization required: ${action}`); throw 401; };
-                    let uData = usersDB.query(action,{ref:user||'.+'});
-                    if (uData) { return uData } else { throw 400; };
+                    if (!ctx.authorize(rauth)) { scribble.warn(`Authorization required: ${action}`); throw 401; };
+                    return usersDB.query('names',{ref:user||'.+'});
+                    //let uData = usersDB.query(action,{ref:user||'.+'});
+                    //if (uData) { return uData } else { throw 400; };
                 default:
                     scribble.warn(`Unsupported user information request: ${action}`);
                     throw 400;
@@ -166,8 +172,12 @@ nativeware.account = function account(options={}) {
                                 record.credentials = safe;
                                 self.scribe.trace(`user record[${record.username}] ==> ${print(record,40)}`);
                                 let entry = {member: '', status: 'PENDING'}.mergekeys(record);
-                                // can't change one's own membership or status only manager/admin...
-                                if (!manager && exists) entry.mergekeys({member: existing.member, status: existing.status});
+                                // can't change one's own membership or status only manager/admin can...
+                                if (exists) entry.mergekeys({member: existing.member, status: existing.status});
+                                if (manager) {
+                                    entry.status = record.status || entry.status;
+                                    entry.member = record.member || entry.member;
+                                };
                                 self.scribe.trace(`user entry[${entry.username}] ==> ${print(entry,60)}`);
                                 changes.push({user: record.username, result: usersDB.chgUser(record.username,entry)[0]||[]});
                             } else {
@@ -187,14 +197,14 @@ nativeware.account = function account(options={}) {
             };
         };
         if (ctx.verbIs('patch') && action==='archive') {
-            if (!manager) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
+            if (!ctx.authorize(usersDB.schema('auth')||'admin')) throw 401;      // check auth: DB auth or admin
             let data = usersDB.query('archive');
             let arc = usersDB.db('archive','@',data[0]);
             let usrs = usersDB.db('users','$',data[1]);
             usersDB.changed();
             let amsg = `Archived ${data[0].length} users; ${data[1].length} ACTIVE users.`
             scribble.log(amsg);
-            return {msg: amsg, archive: arc.length, archived: data[0].length, users: usrs.length};
+            return {msg: amsg, archive: arc.length, archived: data[0].length, active: usrs.length};
         };
         throw 501;  // other methods not supported
    };

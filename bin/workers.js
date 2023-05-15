@@ -11,9 +11,6 @@
  */
 
 
-
-
-
 ///*************************************************************
 /// Dependencies...
 require('./Extensions2JS');
@@ -23,7 +20,7 @@ const fsp = require('fs').promises;
 const path = require('path');
 const qs = require('querystring');
 const https = require('https');
-const { asBytes, asList, asStyle, base64:x64, hmac, jxTo, pad, pluralize, print, uniqueID } = require('./helpers');
+const { asList, asStyle, asTimeStr, base64:x64, hmac, jxTo, pad, print, uniqueID } = require('./helpers');
 const bcrypt = require('bcryptjs');
 const sgMail = require('@sendgrid/mail');
 const { resolve } = require('dns');
@@ -38,13 +35,17 @@ var unsupported = async ()=>{ throw(501); };
 ///*************************************************************
 /// Process error handling for graceful exit...
 let cleanup = {
-    callback: (code)=>scribe.write('','flush',[`Graceful exit[${code}]...`]), // default callback
-    delay: 400,  
-  };
-let cleanupCalled = false;  // flag to prevent circular calls.
+    callback: (code)=>{
+        let internals = workers.internals();
+        scribe.write('','dump',[JSON.stringify(internals,null,2)]);
+        scribe.write('','flush',[`Graceful exit[${code}]...`]); // default callback
+    },
+    delay: 400,
+    called: false   // flag to prevent circular calls.
+};
 let gracefulExit = function (code=1) { // graceful exit call...
-      if (!cleanupCalled) {
-        cleanupCalled = true;
+      if (!cleanup.called) {
+        cleanup.called = true;
         cleanup.callback(code);  // do app specific cleaning once before exiting
         setTimeout(process.exit,cleanup.delay,code);  // no stopping!
       };
@@ -98,7 +99,6 @@ workers.cleanupProcess = (options={}) => { cleanup.mergekeys(options); return cl
  */
 let cfgAuth = { activation: {size: 6, base: 10, expiration: 10}, login: {size: 7, base: 36, expiration: 10}, bcrypt_iterations: 11}
 let auth = { 
-    //cfg: { activation: {size: 6, base: 10, expiration: 10}, login: {size: 7, base: 36, expiration: 10}, bcrypt_iterations: 11},
     checkCode: (challengeCode,passcode) => {
         if (!passcode) return false;
         let expires = new Date((passcode.iat+passcode.exp)*1000);
@@ -215,12 +215,10 @@ workers.jwt = {
  * @return {object} stats for the given file system object
  */
 
-let safeAccess = async (spec,flgs) => { 
+async function safeAccess(spec,flgs) { 
     let flags = {f:FS.F_OK, r:FS.R_OK, w:FS.W_OK, x:FS.X_OK };
     let fx = (flgs||'').split('').map(f=>flags[f]).reduce((a,c)=>a|c,flags.f);
     try { return await fsp.access(spec,fx) } catch(e) { return null; }; };
-///*************************************************************
-/// Directory/folder/file (i.e. files system objects, FSO) listing function
 /**
  * @function safeStat safely stats a file system object without throwing an error (null)
  * @param {string} spec - folder or file to stat
@@ -581,11 +579,11 @@ class Internals {
     clear(tag, key) { tag ? (key ? delete this.data[tag][key] : delete this.data[tag]) : Object.keys(this.data).forEach(k=>delete this.data(k)) }
 }
 
+// internal server data...
 workers.analytics = new Internals();
 workers.blacklists = new Internals();
 workers.logins = new Internals();
 workers.statistics = new Internals();
-
 workers.logins.log = function log(usr, tag, err) {
     usr = usr || 'unknown';
     workers.logins.set(usr,tag,new Date().toISOString());
@@ -610,6 +608,13 @@ workers.logins.log = function log(usr, tag, err) {
         workers.logins.clear(usr,'mark');
     };
 };
+workers.internals = ()=>{
+    let internals = { statistics: workers.statistics.get(), analytics: workers.analytics.get(),
+        logins: workers.logins.get(), blacklists: workers.blacklists.get() };
+    internals.statistics.$.uptime = asTimeStr(new Date() - new Date(internals.statistics.$.start));
+    return internals;
+}
+
 
 module.exports = function configure(cfg={}) {
     if ((typeof cfg=='object') && cfg!==null) {

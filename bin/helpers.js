@@ -102,7 +102,7 @@ helpers.hmac = (msg,key='',enc='base64',algo='sha256') => crypto.createHmac(algo
 
 /**
  * @function serialize removes all circulr references from an object
- * @function circularize restores all circulr references of an object; must be linear to start!
+ * @function circularize restores all circular references of an object; must be linear to start!
  * @param {object} obj - object being modified
  * @return {object} - altered version of obj
  * @example
@@ -151,7 +151,7 @@ helpers.isMod = (n,m=2) => !(n % m);
  * @param {object} obj - object to copy
  * @return {object} - returns an object deep copy 
  */
-helpers.jxCopy = obj => { try { return JSON.parse(JSON.stringify(obj)); } catch(e) { console.log(e,obj); return null; } };
+helpers.jxCopy = obj => { try { return JSON.parse(JSON.stringify(obj)); } catch(e) { console.error(e,obj); return null; } };
 
 /**
  * @function jxTo converts JSON to objects

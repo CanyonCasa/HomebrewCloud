@@ -228,7 +228,7 @@ WrapSQ3.prototype.logger = function logger(flag, msgObj) {
     var logFile = this.cfg.log;
     fs.appendFile(this.cfg.log,msg, 
       function(err) {
-        if (err) { console.log("WrapSQ3 module: Problem writing to "+logFile+"!"); };
+        if (err) { console.error("WrapSQ3 module: Problem writing to "+logFile+"!"); };
         }
       );
     };

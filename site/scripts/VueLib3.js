@@ -311,7 +311,7 @@ console.warn('autoload incomplete:',this.$$app.lazy.files);
                 phone: ['(?:\\+1)?\\d{10}','Enter a 10 digit phone number'],
                 tag: ['[a-z0-9]{4,8}','Private security tag, 4-8 letters and/or numbers'],
                 text: ["[^\\\/<>]*",'Any general text input',/[^\\\/<>]*/],
-                username: ['[a-z][a-z0-9]{2,15}','Username may contain 3-16 (lowercase) letters and numbers beginning with a letter']
+                username: ['[a-z][a-z0-9]{2,15}','Username may contain 3-15 (lowercase) letters and numbers beginning with a letter']
             };
             const mfunc = { // binding modifiers...
                 lc: v=>v.toLowerCase(),                                 // force lowercase of input

@@ -95,7 +95,7 @@ const siteLib = {
         'accnt-user-admin': {
             props: ['account', 'admin', 'groups'],
             computed: {
-                membership() { return this.account.member.split(','); }
+                membership() { return this.account.member.split(',').filter(m=>m); }    // filter possible empty string
             },
             methods: { 
                 chgSts(status) { this.$emit('update:account',{}.mergekeys(this.account).mergekeys({status: status})); },
@@ -234,7 +234,7 @@ const siteLib = {
         },
 
         // component for managing groups
-        'account-groups': {
+        'accnt-grps': {
             props: ['admin','groups', 'users'],
             data: function () { return {
                 chgdUsers: [],
@@ -246,7 +246,7 @@ const siteLib = {
                 groupsNonAdmin() { return this.groups.filter(g=>g.name!=='admin') },
                 members() {
                     let m = {}; this.groups.map(g=>m[g.name]=[]);
-                    this.users.x1.map(u=>u.member.split(',').map(g=>m[g]?m[g].push(u.username):null));
+                    this.users.x1.map(u=>u.member.split(',').filter(m=>m).map(g=>m[g]?m[g].push(u.username):null));
                     return m;
                 }
             },
@@ -304,6 +304,7 @@ const siteLib = {
             props: ['show','who'],
             data: ()=>({
                 account: jsonCopy(SITE.account),    // account represents aggregated data sent for /user/change
+                arcMsg: '',
                 groups: [],
                 manage: false,
                 pending: false, // account changes
@@ -318,6 +319,7 @@ const siteLib = {
                 admin() { return this.who.member.includes('admin'); },
                 chgdGroups() { return this.groups.filter(g=>g.chgd).map(g=>g.name); },
                 chgdUsers() { return this.users.filter(u=>u.chgd||(u.username===this.account.username&&this.pending)) },
+                chgdUsersList() { return this.chgdUsers.map(u=>u.username).join(','); },
                 manager() { return this.admin || this.who.member.includes('manager'); },
                 mode() { return this.manage ? 'Manage' : this.who.valid ? 'Edit' : 'Create'; },
                 ready() { return  {
@@ -346,7 +348,7 @@ const siteLib = {
                         [{ ref: this.account.username, record: this.account }];
                     let hdrs = this.who.token ? {authorization: `Bearer ${this.who.token}`} : {};
                     if (body.length===0) return;
-                    this.fetchJSON('POST','/user/change',{ headers: hdrs, body: body } )
+                    this.fetchJSON('POST','/user/change',{ headers: hdrs, body: body })
                         .then(res=>res.jxOK&&!res.jx.error ? res.jx : [])
                         .then(results=> { 
                             this.report = results;
@@ -355,10 +357,16 @@ const siteLib = {
                         })
                         .catch(e=>{ this.report(e, e.toString()); console.error(e); });
                 },
+                archive() {
+                    this.fetchJSON('PATCH','/user/archive', { headers: {authorization: `Bearer ${this.who.token}`}})
+                    .then(res=>res.jxOK&&!res.jx.error ? res.jx : [])
+                    .then(results=> { this.arcMsg = results.msg; })
+                    .catch(e=>{ this.arcMsg=e.toString(); console.error(e); });
+                },
                 chgMembers(usrMbrshp) {
                     let body = [];
                     usrMbrshp.mapByKey((mbrs,un)=>{
-                        this.users[this.userIndexes[un]].member = mbrs.join(',');
+                        this.users[this.userIndexes[un]].member = mbrs.filter(m=>m).join(',');
                         body.push({ref: un, record: this.users[this.userIndexes[un]]});
                     });
                     this.fetchJSON('POST','/user/change',{ body: body, headers: {authorization: `Bearer ${this.who.token}`} })
@@ -384,7 +392,7 @@ const siteLib = {
                 fetchGroupsAndUsers() {
                     this.fetchJSON('GET','/user/users',{headers:{authorization: `Bearer ${this.who.token}`}})
                         .then(res=>{ return res.jxOK&&!res.jx.error ? res.jx : []; })
-                        .then(users=>{ users.forEach(u=>u.member.split(',').sort().join(',')); 
+                        .then(users=>{ users.forEach(u=>u.member.split(',').filter(m=>m).sort().join(',')); 
                             users.forEach(u=>u.credentials={password:'', pin:''}); this.users = users; })
                         .catch(e=>console.error("fetchGroupsAndUsers[users]:",e));
                     this.fetchJSON('GET','/user/groups',{headers:{authorization: `Bearer ${this.who.token}`}})
@@ -421,12 +429,20 @@ const siteLib = {
                         </span>
                     </div>
                     <div v-show="manage" class="text-indent">
-                        <label><input type="radio" name="view" :value="'user'" v-model="view" />Manage Users</label>
-                        <label><input type="radio" name="view" :value="'group'" v-model="view" />Manage Groups</label>
+                        <label><input type="radio" name="view" :value="'user'" v-model="view" />Users</label>
+                        <label><input type="radio" name="view" :value="'group'" v-model="view" />Groups</label>
+                        <label><input type="radio" name="view" :value="'archive'" v-model="view" />Archive</label>
                     </div>
 
-                <form class="account-form" ref="account-form" v-debounce.keyup="validate">
-                <div v-show="(manage && view==='user') || (!who.valid && step===1) || (!manage && who.valid)">
+                <div v-show="manage && view==='archive'">
+                    <h4>Archive inactive users</h4>
+                    <p class="text-indent text-italic">Note: Archived users can not be restored without manual intervention.</p>
+                    <p class="text-right"><button @click="archive">Archive Users</button></p>
+                    <p class="text-indent">{{arcMsg}}</p>
+                </div>
+
+                <form v-show="(manage && view==='user') || (!who.valid && step===1) || (!manage && who.valid)" 
+                    class="account-form" ref="account-form" v-debounce.keyup="validate">
                     <h4>{{userHdr}}</h4>
                     <!-- Users list for when managing users... -->
                     <div class="account-grid" v-if="manage">
@@ -448,7 +464,7 @@ const siteLib = {
                         <accnt-user-admin v-if="manage" :admin="admin" :groups="groups" v-model:account="account"></accnt-user-admin>
                     </div>
                     <!-- form submission and report... -->
-                    <p class="clear" v-if="manage">Changed Users: {{chgdUsers.join(', ')}}</p>
+                    <p class="clear" v-if="manage">Changed Users: {{chgdUsersList}}</p>
                     <button type="button" class="right" :disabled="!valid.accountForm" @click="accountDo">{{ who.valid?'SAVE':'CREATE' }}</button> 
                     <div class="account-grid clear" v-if="report">
                     <div class="account-grid-cx text-large">Results...</div>
@@ -459,14 +475,12 @@ const siteLib = {
                         <div class="account-grid-c2 text-dark text-bolder" v-if-class:text-alert="rpt.error">{{rpt.result?.action}}</div>
                     </template>
                     </div>
-
-                </div>
                 </form>
 
                 <accnt-activate v-if="(!who.valid && step===2)" :username="account.username"></accnt-activate>
 
-                <account-groups v-if="(manage && view==='group')&&ready.groups&&ready.users" :admin="admin" :groups="groups" 
-                    :users="usersOrdered" @change="chgMembers"></account-groups>
+                <accnt-grps v-if="(manage && view==='group')&&ready.groups&&ready.users" :admin="admin" :groups="groups" 
+                    :users="usersOrdered" @change="chgMembers"></accnt-grps>
                 </div>`
         },
 

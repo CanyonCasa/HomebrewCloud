@@ -135,7 +135,7 @@ try {
             await sendResponse(ctx,res);                    // return response to client
         } catch(err) { await handleError(err,ctx,res); };   // handle any error that occurs
     }).listen(app.cfg.port);
-    statistics.set('$cloud',null,{host: HOST, start: new Date().toISOString(), mode: MODE});
+    statistics.set('$',null,{code: 'HomebrewCloud', host: HOST, start: new Date().toISOString(), mode: MODE});
     scribe.info(`HomebrewCloud site setup complete: ${scfg.host}:${cfg.site.port}`);
     if (MODE==='production') sms({text:`HomebrewCloud service started on host ${HOST}`})
       .catch(e=>{scribe.log('sms failure!:',e); });

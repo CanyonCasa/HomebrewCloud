@@ -13,8 +13,8 @@
 /// Dependencies...
 ///*************************************************************
 const fsp = require('fs').promises;
-const { asList, asTimeStr, getAllMethods, jxFrom, print, resolveSafePath, splitAt, verifyThat } = require('./helpers');
-const { analytics, auth: {genCode}, blacklists, logins, mail, safeStat, sms, statistics } = require('./workers');  
+const { getAllMethods, print, resolveSafePath, splitAt, verifyThat } = require('./helpers');
+const { auth: {genCode}, internals, mail, safeStat, sms } = require('./workers');  
 const { ResponseContext } = require('./serverware');
 const jxDB = require('./jxDB');
 const jsonata = require('jsonata');
@@ -49,11 +49,18 @@ function info(ctx) {
     let v4 = raw.replace(/:.*:([\d.]+)/,($0,$1)=>$1.includes('.')?$1:'127.0.0.'+$1);
     let v6 = (v4!=raw) ? raw : "0:0:0:0:0:0:0:0";
     let dx = new Date().style();
-    if (ctx.request.params.recipe==='iot') return { ip: v4, time: dx.e, iso: dx.iso };
-    let internals = { statistics: statistics.get() };
-    internals.statistics.$diy.uptime = asTimeStr(new Date(dx.iso) - new Date(internals.statistics.$diy.start));
-    if (ok) internals.mergekeys({ analytics: analytics.get(), app: this, blacklists: blacklists.get(), logins: logins.get() });
-    return { ip: {raw: raw, v4: v4, v6: v6, port: port}, date: dx }.mergekeys(internals);
+    switch (ctx.request.params.recipe) {
+        case 'iot': return { ip: v4, time: dx.e, iso: dx.iso };
+        case 'cfg': return ok ? this : {};
+        case 'ctx': return ok ? ctx : {};
+        case 'internals': return ok ? internals() : {statistics:internals().statistics};
+        case 'info':
+        default:
+            let info = { ip: {raw: raw, v4: v4, v6: v6, port: port}, date: dx };
+            info.mergekeys(ok?internals():{statistics:internals().statistics});
+            if (ok) { info.mergekeys({cfg: this, ctx: ctx});
+            return info;
+    };
 };
 
 /**
@@ -327,8 +334,8 @@ apiware.api = function api(options={}) {
                     case "twilio": return new ResponseContext('xml',Buffer.from(twilio.call(site,ctx)));
                     default: throw 404;
                 };
-            case '!':   // server infor
-                if (!ctx.verbIs('get')) return info.call(site,ctx);
+            case '!':   // server information
+                if (ctx.verbIs('get')) return info.call(site,ctx);
                 throw 405;
             case '~':   // pseudo stat/upload recipe
                 if (ctx.verbIs('get')) return await stats.call(site,db,ctx);
