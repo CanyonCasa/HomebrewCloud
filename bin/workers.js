@@ -22,7 +22,7 @@ const qs = require('querystring');
 const https = require('https');
 const { asList, asStyle, asTimeStr, base64:x64, hmac, jxTo, pad, print, uniqueID } = require('./helpers');
 const bcrypt = require('bcryptjs');
-const sgMail = require('@sendgrid/mail');
+const nodemailer = require('nodemailer');
 const { resolve } = require('dns');
 
 
@@ -265,35 +265,8 @@ workers.listFolder = listFolder;
 
 
 ///*************************************************************
-/// Email Messaging Service...
-let cfgSendgrid = null;
-
-const mailRequest = (payload) =>({
-    protocol: 'https:',
-    hostname: 'api.sendgrid.com',
-    method: 'POST',
-    path: '/v3/mail/send',
-    headers: {
-        'Authorization': `Bearer ${cfgSendgrid.key}`,
-        'Content-type': 'application/json',
-        'Content-Length': Buffer.from(payload).byteLength
-    }
-});
-const mailSend = function(msg) {
-    let payload = JSON.stringify(msg);
-    let rqst = mailRequest(payload);
-    return new Promise((resolve,reject)=>{
-        let req = https.request(rqst,res=>{
-            let body = '';
-            res.on('data',d=>{body +=d});
-            res.on('end', (x)=>{ resolve({report: res, id: res.headers['x-message-id'], body: body, 
-                status: {msg: res.statusMessage, code: res.statusCode}, headers: res.headers, x: x}); });
-        });
-        req.on('error',(e)=>resolve({report: null, error: e}));
-        req.end(payload);
-    });
-};
-
+/// eMail Service
+let cfgMail = null;
 /**
  * @function mail sends a mail message via Sendgrid, throws an error if Sendgrid module not configured
  * @param {object} msg - email message object containing addresses and body
@@ -309,24 +282,24 @@ const mailSend = function(msg) {
  */
 // email service wrapper assumes msg provides valid 'to,cc,&bcc addresses' and a 'body/text/html'
 workers.mail = async function mail(msg) {
-    if (!cfgSendgrid) throw 503;
-    let sender = cfgSendgrid.validatedSenders.includes(msg.from) ? msg.from : cfgSendgrid.validatedSenders[0];
-    let mmsg = { from: {email: sender}, subject: msg.subject||msg.subj||cfgSendgrid.subject, content: [] };
-    if (msg.text) mmsg.content.push({type: 'text/plain', value: msg.text});
-    if (msg.html) mmsg.content.push({type: 'text/html', value: msg.html});
-    if (msg.body && typeof msg.body=='object') mmsg.content.push(msg.body);
-    if (!mmsg.content.length) mmsg.content.push({type: 'text/plain', value: cfgSendgrid.text||'No content'});
-    let addr = {to: asList(msg.to), cc: asList(msg.cc), bcc: asList(msg.bcc)}.filterByKey(lst=>lst.length);
-    if ([].concat(addr.to||[]).concat(addr.cc||[]).concat(addr.bcc||[]).length===0) addr.to = [cfgSendgrid.to];
-    let addrStr = Object.keys(addr).reduce((a,k)=>a.concat(addr[k]),[]).join(', ');
-    mmsg.personalizations = [addr.mapByKey(a=>a.map(r=>({email:r})))];
-    let summary = { msg: `MAIL[${mmsg.subject}] sent to: ${addrStr}` };
+    if (!cfgMail) throw 503;
+    let emsg = {from: cfgMail.from };
+    if (msg.from) emsg.replyTo = msg.from;
+    emsg.subject = msg.subject || msg.subj || cfgMail.subject;
+    let who = {to: asList(msg.to), cc: asList(msg.cc), bcc: asList(msg.bcc)}.filterByKey(lst=>lst.length);
+    if (Object.keys(who).length===0) who.to = asList(cfgMail.to);
+    emsg.mergekeys(who);
+    let toWhom = Object.keys(who).reduce((a,k)=>a.concat(who[k]),[]).join(', ');
+    if (msg.text||msg.body) emsg.text = msg.text||msg.body;
+    if (msg.html) emsg.html = msg.html;
+    if (!msg.text && !msg.html) emsg.text = cfgMail.text;
+    let note = { msg: `MAIL[${emsg.subject}] sent to: ${toWhom}` };
     try {
-        let {response,body,status,headers} = await mailSend(mmsg);
-        status.detail = "SendGrid Response"
-        let rpt = { body, status, headers };
-        return { response: msg.verbose?response:undefined, report: rpt, error: status.code>=400?status:false, msg: mmsg, summary: summary };
-    } catch(e) { return {error: e, response: msg.verbose?response:undefined, report: rpt, msg: mmsg, summary: summary } };
+        let info = await cfgMail.transporter.sendMail(emsg);
+        return { response: msg.verbose ? info:info.response, msg: emsg, summary: note };
+    } catch(e) {
+        return { error: e, msg: emsg, summary: note };
+    };
 };
 
 
@@ -621,10 +594,14 @@ module.exports = function configure(cfg={}) {
         if (cfg.auth) cfgAuth.mergekeys(cfg.auth);
         if (cfg.jwt) cfgJWT.mergekeys(cfg.jwt);
         mimeTypesExtend(cfg.mimeTypes); // must be called with or w/o configuration
-        if (cfg.sendgrid || cfg.mail) {
-            cfgSendgrid = cfg.sendgrid || cfg.mail;
-            cfgSendgrid.validatedSenders = asList(cfgSendgrid.from);
-            sgMail.setApiKey(cfgSendgrid.key);
+        if (cfg.mail) { // set configuration and create transport
+            cfgMail = cfg.mail;
+            cfgMail.transporter = nodemailer.createTransport({
+                host: cfg.mail.host,
+                port: cfg.mail.port || 587,
+                secure: cfg.mail.secure || false,
+                auth: cfg.mail.auth
+            })
         };
         if (cfg.twilio || cfg.text) cfgTwilio = cfg.twilio || cfg.text;
     }
