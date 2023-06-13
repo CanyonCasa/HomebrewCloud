@@ -58,7 +58,7 @@ function info(ctx) {
         default:
             let info = { ip: {raw: raw, v4: v4, v6: v6, port: port}, date: dx };
             info.mergekeys(ok?internals():{statistics:internals().statistics});
-            if (ok) { info.mergekeys({cfg: this, ctx: ctx});
+            if (ok) info.mergekeys({cfg: this, ctx: ctx});
             return info;
     };
 };
@@ -91,7 +91,7 @@ async function sendMail(msg) {
        tmp = tmp.map(a=>a.includes('@')?a:addressBook[a]).filter(a=>a).filter((v,i,a)=>v && a.indexOf(v)===i).join(',');
        if (tmp.length) letter[addr] = tmp;
     });
-    scribble.trace(`sendMail: ${letter}`);
+    scribble.trace(`sendMail: ${print(letter,70)}`);
     let response = await mail(letter);
     return response;
 };
