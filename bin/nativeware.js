@@ -178,8 +178,12 @@ nativeware.account = function account(options={}) {
                                     entry.status = record.status || entry.status;
                                     entry.member = record.member || entry.member;
                                 };
+                                // history managed here...
+                                let now = new Date().toISOString();
+                                entry.history = existing?.history || [];
+                                entry.history.push([now,ctx.user.username||entry.username]);
                                 self.scribe.trace(`user entry[${entry.username}] ==> ${print(entry,60)}`);
-                                changes.push({user: record.username, result: usersDB.chgUser(record.username,entry)[0]||[]});
+                                changes.push({user: record.username, result: usersDB.chgUser(record.username,entry)[0]||{}});
                             } else {
                                 changes.push({code: 401, user: record.username, msg: self.server.emsg(401)});   // not authorized
                             };
@@ -187,7 +191,8 @@ nativeware.account = function account(options={}) {
                           changes.push({code: 400, user: record.username, msg: self.server.emsg(400)});     // malformed request
                         };
                     };
-                    scribble.trace("user changes:", changes);
+                    if (changes.length) scribble.trace(`user[${ctx.user.username||'-'}] changes...`);
+                    changes.forEach(u=>scribble.trace(`  user[${u.user}(${u.result?.detail||'-'})]: ${u.result?.action||u.msg}`));
                     return changes;
                 case 'groups':
                     if (!manager) throw 401;
