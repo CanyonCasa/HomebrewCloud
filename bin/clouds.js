@@ -31,6 +31,12 @@ SYNTAX (from within the bin folder):
   See documentation for assumed directory layout and config file details.
 */
 
+// default parameters...
+const endPoints = {
+    account: '/user/:action/:user?/:opts*',
+    api: '/:prefix([$@!~]):recipe/:opts*',
+    login: '/:action(login|logout)'
+};
 
 // load language extension dependencies first...
 require('./Extensions2JS');   // personal library of additions to JS language, only required once
@@ -42,19 +48,19 @@ const http = require('http');
 const cfg = require(process.argv[2] || '../restricted/config');
 
 // low level libraries; both helpers and workers MUST be called first from cloud.js for correct operation...
-const { $VERSION } = require('./helpers');  // low level utility functions  
+const { $VERSION, jxFrom, markTime} = require('./helpers');   // low level utility functions  
 const { Scribe, sms, statistics } = require('./workers')(cfg.workers);  // high level (complex) functions
 const scribe = Scribe(cfg.workers.scribe);  // main Scribe instance
 
 const jxDB = require('./jxDB');             // simple JSON based database library
-const { addUserCandy } = require('./authware');
 
 // middleware libraries...
-const serverware = require('./serverware'); // built-in server functions, request parser, router, and response handler, ...
-const nativeware = require('./nativeware'); // application built-in middleware functions, including (static) content handler
-const apiware = require('./apiware');       // Homebrew API middleware handler
+const serverware = require('./serverware');         // built-in server functions, request parser, router, and response handler, ...
+const nativeware = require('./nativeware');         // application built-in middleware functions, including (static) content handler
+const apiware = require('./apiware');            // Homebrew API middleware handler
 // optional custom user middleware (highest precedence), defined as empty module if not found, overrides native and api functions
 const customware = (()=>{ try { return require('./customware'); } catch (e) { return {}; }; })();   // IIFE
+
 
 // message identifiers...
 const VERSION = cfg.$VERSION || $VERSION;
@@ -71,42 +77,46 @@ let tag = scfg.tag || 'cloud';
 scribe.debug(`HomebrewCloud site '${tag}' setup...`);
 
 scfg.headers = {"x-powered-by": "HomebrewCloud "+VERSION}.mergekeys(scfg.headers);
-app.mergekeys({cfg: scfg, db: {}, routes: [], scribe: Scribe(tag), tag: tag});
+app.mergekeys({cfg: scfg, routes: [], tag: tag, db: {}});
 scfg.databases.mapByKey((def,tag)=>{
     def.tag = def.tag || tag;       // ensure a defined tag
     scribe.trace(`Connecting db[${tag}] ...`);
     app.db[tag] = new jxDB(def);    // establish database
 });
-// add syntax candy to database prototype...
-if (app.db.users) addUserCandy(app.db.users);
+app.scribe = Scribe(tag);
 
 // authentication setup required by auth & account middleware
 app.authenticating = !(scfg.options===null || scfg.options?.auth === null);
 if (app.authenticating && !app.db.users) scribe.fatal('Users database not found, required for authentication');
+//app.getUser = app.db.users ? (usr) => app.db.users.query('userByUsername',{username:usr.toLowerCase()}) : ()=>{};
+//app.chgUser = app.db.users ? (usr,data) => app.db.users.modify('users',[{ref: usr.toLowerCase(), record: data}]) : ()=>{};
+if (app.db.users) {
+    let proto = Object.getPrototypeOf(app.db.users);
+    proto.getUser = function getUser(usr) { return this.query('userByUsername',{username:usr.toLowerCase()}) };
+    proto.chgUser = function chgUser(usr,data) { return this.modify('users',[{ref: usr.toLowerCase(), record: data}]) };
+};
 
 // build app handlers and routers...
 let [appNativeware, appAPIware, appCustomware] = [nativeware, apiware, customware].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(app) : v));  // bind f()'s to App scope
 let { handlers=[], options={}, root } = app.cfg;
 let { account={}, analytics, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
-function customizeRoute (cfg,defaultRoute) { cfg.route = cfg.route || defaultRoute || ''; return cfg; }
+function customizeRoute (obj,code) { obj.route = obj.route||'' + endPoints[code]||''; return obj.route; }
 function addRoute (method,route,afunc) { serverware.addRoute(app.routes,method||'',route,afunc); };
 // create and build middleware stack starting with priority built-in configurable features...
 if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));
 if (cors!==null) addRoute('any','',appNativeware.cors(cors));
 if (app.authenticating) {
-    customizeRoute(account, appNativeware.routes.account);
+    customizeRoute(account,'account');
     addRoute('any',account.route,appNativeware.account(account));
-    customizeRoute(login, apiNativeware.routes.login);
+    customizeRoute(login,'login');
     addRoute('any',login.route,appNativeware.login(login));
 };
 // custom handlers specified by configuration...
 handlers.forEach(h=>{
+    customizeRoute(h,h.code);
     let { code='', method='any', route='' } = h;
     let codeWare = appCustomware[code] || appAPIware[code] || appNativeware[code] || null;
-    if (codeWare) {
-		customizeRoute(h,codeWare?.routes[h.code]);
-		addRoute(method.toLowerCase(),h.route,codeWare(h));
-	};
+    if (codeWare) addRoute(method.toLowerCase(),route,codeWare(h));
 });
 if (root) addRoute('get','',appNativeware.content({root:root}));  // default open static server, if site root defined
 
@@ -117,7 +127,7 @@ let handleError = serverware.defineErrorHandler.call(app,app.cfg);
 try {
     http.createServer(async (req,res) => { // Instantiate the HTTP server with async request handler...
         // app code called for each http request...
-        let ctx = serverware.createContext();               // define context for the request response
+        let ctx = serverware.createContext();                       // define context for the request response
         ctx.headers(app.cfg.headers);                       // append site specific headers to context
         try {                                               // wrap all processing to trap all errors
             await prepRequest(req,ctx);                     // parse request headers and body, optionally authenticate

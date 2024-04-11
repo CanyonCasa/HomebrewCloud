@@ -30,6 +30,7 @@ NOTES:
 require('./Extensions2JS');
 const fs = require('fs');
 const fsp = fs.promises;
+const readline = require('readline');
 const jsonata = require('jsonata');
 const { jxCopy, jxSafe, print, verifyThat } = require('./helpers');
 const { Scribe } = require('./workers');
@@ -110,13 +111,13 @@ function jxDB(def={},data) {
           dbx['_'].delay!==undefined ? dbx['_'].delay : 2000,   // changed write delay, default 1000ms
         readOnly: def.readOnly || dbx['_'].readOnly || false,   // flag to inhibit changes
         file: this.file,                                        // for reference only
-        tag: def.tag || dbx['_'].tag || 'DB',                   // for reference only
+        tag: def.tag || dbx['_'].tag || this.file.replace(/^.*[\\/]|\..*$/g, '') || 'DB',  // for reference only
         auth: def.auth || dbx['_'].auth || ''                   // auth for DB (PATCH) operations; ''==admin
     };
     dbx['_'].mergekeys(schema);
     this.db = dbWrapper.call(this,dbx);                         // wrapper for private data interface
 
-    this.scribble = Scribe(def.tag||'db');                      // transcripting reference
+    this.scribble = Scribe(schema.tag||'db');                   // transcripting reference
 
     // file watch and reloading; blocks during saving; implements the save timeout...
     this.watcher = (function(){
@@ -145,7 +146,7 @@ function jxDB(def={},data) {
             return watch;
         }
     }).call(this);    //IIFE
-    this.scribble.debug(`Database ${def.tag} successfully initialized...`);
+    this.scribble.debug(`Database ${schema.tag} successfully initialized...`);
 };
 
 // re-load database file into memory.
@@ -249,7 +250,6 @@ jxDB.prototype.query = function query(recipeSpec, bindings=null, user={}) {
         return recipe.dflt||null;
     };
 };
-
 // simple database edit...
 // recipeSpec defines recipe.name or actual recipe object
 // data defines an array of objects/arrays in form 
@@ -270,7 +270,8 @@ jxDB.prototype.modify = function modify(recipeSpec, data, user={}) {
         throw {code: 500, detail: "jxDB.modify ERROR: bad recipe precheck -- no collection!:"};
     };
     if (!verifyThat(data,'isArrayOfAnyObjects')) {
-        this.scribble.error(`ERROR: modify expects an array of objects: ${print(data)}`);
+        this.scribble.error(`ERROR: jxDB.modify expects an array of objects: ${print(data)}`);
+        return [{action: 'error', ref: null, detail:'ERROR: jxDB.modify expects an array of objects'}];
         return results;
     };
     for (let d of data) {
@@ -322,5 +323,77 @@ jxDB.prototype.modify = function modify(recipeSpec, data, user={}) {
     if (results.some(r=>r.action!=="nop")) this.changed(); // flag changes for save
     return results; // array of actions and references for each data record.
 };
+
+// external database query...
+// recipeSpec defines recipe.name or actual recipe object; fields includes
+//   file: required path to external file
+//   limit: specifies an optional max number of data entries returned; negative value returns from tail
+//   header: boolean that specifies whether to treat first line of file as header.
+// returns array of sequential data entries or undefined (no recipe) or null, but never error condition...
+jxDB.prototype.recall = async function recall(recipeSpec, bindings=null, user={}) {
+    let recipe = typeof recipeSpec=='string' ? this.lookup(recipeSpec) : recipeSpec; // pass recipe object or name
+    if (!recipe.file) {   // precheck verifies required recipe fields...
+        this.scribble.trace("jxDB.recall ERROR: bad recipe precheck -- no file!:",print(recipeSpec)); 
+        throw {code: 500, detail: "jxDB.recall ERROR: bad recipe precheck -- no file!:"};      
+    };
+    // prep params... defaults (recipe.bindings) and/or query bindings may or may not be defined
+    let params = {}.mergekeys(recipe.bindings).mergekeys(bindings);
+    params = (jxSafe(params,recipe.scrub||'*')).mergekeys({_: user});
+    this.scribble.trace(`jxDB.recall[${recipe.name}] params: ${print(params,60)}`);
+    try {
+		let results = [];
+		let header = null;
+		let jobj;
+        let n=0;
+
+        const fileStream = fs.createReadStream(recipe.file);
+        const rl = readline.createInterface({input: fileStream});
+
+        for await (const line of rl) {
+            n++;
+            if (!line) return;
+            try { 
+                jobj=JSON.parse(line);
+            } catch (e) { 
+                console.error(`Parse Error[#${n}]: ${line}\n${e.message.toString()}`)
+            }; 
+            if (!header && params.header) { header = jobj; continue; };
+            if (!params.limit||(params.limit>0&&results.length<params.limit)||(params.limit<0)) results.push(jobj);
+            if (params.limit<0 && (results.length>-params.limit)) results.shift();
+        };
+        if (header) results.unshift(header);
+        return results;
+    } catch (e) {
+        this.scribble.log(`jxDB.recall ERROR: ${typeof e=='object'?e.message:e.toString()}`); 
+        return recipe.dflt||null;
+    };
+};
+
+// external database edit...
+// recipeSpec defines recipe.name or actual recipe object
+// data defines an array of objects/arrays in form for appending to file
+// returns array of acctions taken for each entry...
+jxDB.prototype.store = async function store(recipeSpec, data, user={}) {
+    let recipe = typeof recipeSpec=='string' ? this.lookup(recipeSpec) : recipeSpec; // pass recipe object or name
+    let results = []; // always an array
+    let result = (a,r,x) =>results.push({action: a, ref: r, detail: x});
+    this.scribble.trace(`  DATA: ${print(data,60)}`);
+    this.scribble.dump(`STORE[${recipe.file}]: ${print(recipe,60)} => ${print(data,60)}`);
+    if (!recipe.file) {  // precheck verifies required recipe fields...
+        this.scribble.error("jxDB.store ERROR: bad recipe precheck -- no collection!:",print(recipeSpec));
+        throw {code: 500, detail: "jxDB.store ERROR: bad recipe precheck -- no file!:"};
+    };
+    if (!verifyThat(data,'isArrayOfAnyObjects')) {
+        this.scribble.error(`ERROR: jxDB.store expects an array of objects: ${print(data)}`);
+        return [{action: 'error', ref: null, detail:'ERROR: jxDB.store expects an array of objects'}];
+    };
+	let lines = data.map(line=>JSON.stringify(jxSafe(line,recipe.filter||'*'))).join('\n')+'\n';
+    return fsp.appendFile(recipe.file,lines,'utf8')
+        .then(x=>{ this.scribble.trace(`${data.length} lines added to ${recipe.file}`); })
+		.then(x=>[{action: 'added', ref: null, detail:`${data.length} lines added to database`}])
+		.catch(e=>[{action: 'error', ref: null, detail:`ERROR: jxDB.store ${e.message.toString()}`}]);
+};
+
+jxDB.prototype.test = async function() { console.log('jxDB.test!'); return ['test']; }
 
 module.exports = jxDB;

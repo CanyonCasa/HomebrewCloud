@@ -17,9 +17,9 @@ if (!(Array.includes||Array.prototype.includes))
 
 /// *************************************************************
 /// Date Style Extension ...
-const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const DSTYLE = /Y(?:YYY|Y)?|[SX][MDZ]|0?([MDNhms])\1?|[aexz]|(['"])(.*?)\2/g;  // Date.prototpye.style parsing pattern
+const STYLE_DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const STYLE_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const STYLE_RE = /Y(?:YYY|Y)?|[SX][MDZ]|0?([MDNhms])\1?|[aefxz]|(['"])(.*?)\2/g;  // Date.prototpye.style parsing pattern
 if (!Date.prototype.style)
 /**
  * @lends Date#
@@ -42,6 +42,7 @@ if (!Date.prototype.style)
  *  a:          short meridiem flag, i.e. A or P
  *  z:          short time zone, i.e. MST
  *  e:          Unix epoch, seconds past midnight Jan 1, 1970
+ *  f:          fractionalseconds past midnight Jan 1, 1970, i.e. with milliseconds
  *  dst:        Daylight Savings Time flag, true/false (not usable in format)
  *  ofs:        Local time offset (not usable in format)
  *  'text':     quoted text preserved, as well as non-meta characters such as spaces
@@ -62,9 +63,11 @@ if (!Date.prototype.style)
  * 
  * @example...
  *    d = new Date();      // 2016-12-07T21:22:11.262Z
- *    d.style();           // { Y: 2016, M: 12, D: 7, h: 21, m: 22, s: 11, x: 262, z: 'MST', e:1481145731.262, a:'PM', N:3, 
- *                              SM: 'December', SD: 'Wednesday', SZ: 'Mountain Daylight Time', LY:true, dst:false, ofs: -420 }
- *    d.style().e;         // 1481145731.262
+ *    d.style();           // { Y: 2016, M: 12, D: 7, h: 21, m: 22, s: 11, x: 262, z: 'MST', e:1481145731, f:1481145731.262, 
+ *                              a:'PM', N:3, SM: 'December', SD: 'Wednesday', SZ: 'Mountain Daylight Time', LY:true, 
+ *								dst:false, ofs: -420 }
+ *    d.style().e;         // 1481145731
+ *    d.style().f;         // 1481145731.262
  *    d.style("MM/DD/YY"); // '12/07/16'
  *    d.style('hh:mm:ss','local')  // '14:22:11', adjusts UTC input time (d) to local time (e.g. h = 22 - 7 = 14 )
  *    d.style('hh:mm:ss','utc')    // '04:22:11', treats input time as local and adjusts to UTC (e.g. h = 21+7 % 24 = 4)
@@ -85,14 +88,15 @@ if (!Date.prototype.style) Date.prototype.style = function(frmt,realm) {
         case 'stamp': return dx.style(`YMMDDThhmmss${(realm && sign==1)?'z':'Z'}`);   // filespec safe timestamp
         case '':  // object of date field values
             var [Y,M,D,h,m,s,ms] = base.split(/[\-:\.TZ]/);
-            return { Y:+Y, M:+M, D:+D, h:+h, m:+m, s:+s, x:+ms, z:zx, e:dx.valueOf()*0.001, a:h<12 ?"AM":"PM", N:dx.getDay(),
-                SM: MONTHS[M-1], XM: MONTHS[M-1].substring(0,3), SD: DAYS[dx.getDay()], XD: DAYS[dx.getDay()].substring(0,3), 
+            var f = +dx*0.001;
+            return { Y:+Y, M:+M, D:+D, h:+h, m:+m, s:+s, x:+ms, z:zx, e:Math.floor(f), f:f, a:h<12 ?"AM":"PM", N:dx.getDay(),
+                SM: STYLE_MONTHS[M-1], XM: STYLE_MONTHS[M-1].substring(0,3), SD: STYLE_DAYS[dx.getDay()], XD: STYLE_DAYS[dx.getDay()].substring(0,3), 
                 SZ:zone, XZ: zx, LY: Y%4==0&&(Y%100==Y%400), ofs: -dx.getTimezoneOffset(),
                 dst: !!(new Date(1970,1,1).getTimezoneOffset()-dx.getTimezoneOffset()), iso: dx.toISOString() };
         default:  // any format string
             function pad(s) { return ('0'+s).slice(-2); };
             var tkn = dx.style(); tkn['YYYY']=tkn.Y; tkn['hh']=('0'+tkn['h']).substr(-2); if (tkn['h']>12) tkn['h']%=12;
-            return (frmt).replace(DSTYLE,$0=>$0 in tkn ? tkn[$0] : $0.slice(1) in tkn ? pad(tkn[$0.slice(1)]) : $0.slice(1,-1));
+            return (frmt).replace(STYLE_RE,$0=>$0 in tkn ? tkn[$0] : $0.slice(1) in tkn ? pad(tkn[$0.slice(1)]) : $0.slice(1,-1));
     };
 };
 
@@ -363,5 +367,7 @@ const helpers = {
     }
 }
 
-export default helpers;
-//window.helpers = helpers;
+//export default helpers;
+window.helpers = helpers;
+
+console.log('ClientLib.js loaded...');

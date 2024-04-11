@@ -21,7 +21,13 @@ const { ResponseContext } = require('./serverware');
 
 ///*************************************************************
 /// declarations...
-var nativeware = {};    // serverware nativeware container    
+// serverware nativeware container    
+var nativeware = {
+	routes: {	// default routes
+		account: '/user/:action/:user?/:opts*',
+		login: '/:action(login|logout)'
+	}
+};
 
 
 ///*************************************************************
@@ -89,7 +95,7 @@ nativeware.account = function account(options={}) {
     let self = this;
     let scribble = this.scribe;
     let usersDB = this.db.users;
-    scribble.info(`Account nativeware initialized for route ${options.route} ...`);
+    scribble.info(`Account nativeware initialized ...`);
     return async function accountMW(ctx) {
         let { action, user, opts } = ctx.request.params;
         let manager = ctx.authorize('admin,manager');       // authenticated admin or manager
@@ -168,7 +174,10 @@ nativeware.account = function account(options={}) {
                                 if (record.credentials) {
                                     if (record.credentials.password) safe.hash = await auth.genHashPW(record.credentials.password);
                                     if (record.credentials.pin) safe.pin = record.credentials.pin;
-                                };
+                                } else if (record.password) {	// temporary backward compatibility
+									safe.hash = await auth.genHashPW(record.password);
+									delete record.password;
+								};
                                 record.credentials = safe;
                                 self.scribe.trace(`user record[${record.username}] ==> ${print(record,40)}`);
                                 let entry = {member: '', status: 'PENDING'}.mergekeys(record);
@@ -281,13 +290,13 @@ nativeware.logAnalytics = function logAnalytics(options={}) {
  */
 nativeware.login = function login(options={}) {
     let scribble = this.scribe;
-    scribble.info(`Login nativeware initialized for route ${options.route} ...`);
+    scribble.info(`Login nativeware initialized ...`);
     return async function loginMW(ctx) {
         scribble.trace(`Login: ${ctx.args.action}`);
         if (ctx.args.action=='logout') return {};
         if (!ctx.authenticated) throw 401;
         if (ctx.authenticated=='bearer' && !ctx.user.ext) throw { code: 401, msg: 'Token renewal requires login' };
-        ctx.jwt = jwt.create(ctx.user);
+        ctx.jwt = ctx.user.other.account==='api' ? jwt.create(ctx.user,null,null) : jwt.create(ctx.user);
         ctx.headers({authorization: `Bearer ${ctx.jwt}`});
         return { token: ctx.jwt, payload: jwt.extract(ctx.jwt).payload };   // response: JWT (as token), and user data (payload)
     };
@@ -310,18 +319,19 @@ nativeware.content = function content(options={}) {
     if (!root) throw `Content[${tag}] nativeware requires a root definition`;
     Object.keys(posts).forEach(p=>{if(!posts[p].root) throw {code:400, msg: `Site options.posts[${p}] requires 'root' property!`};})
     let theCache = new Cache(cache); // add pre-caching???
-    scribble.info(`Content[${tag}] nativeware initialized for route '${route}' and root ${root}`);
+    scribble.info(`Content[${tag}] nativeware added for route '${route}' @ ${root}`);
 
     return async function contentMW(ctx) {
         scribble.trace(`Content[${tag}]: ${ctx.request.method} ${ctx.request.href}`);
-        scribble.trace(`route[${ctx.routing.route.method}]: ${ctx.routing.route.route}`);
+        scribble.extra(`route[${ctx.routing.route.method}]: ${ctx.routing.route.route}`);
         if (!ctx.verbIs('get')) throw 405;
         if (authGet && !ctx.authorize(authGet)) throw 401;    // not authorized
 
         let base = ctx.request.pathname==='/' ? '/'+index : ctx.request.pathname;
         let fileSpec = decodeURI(resolveSafePath(root,base));
         let stats = await safeStat(fileSpec);
-        scribble.trace(`Content[${tag}]: ${fileSpec}, ${stats && stats.isDirectory() ? 'DIR' : 'FILE'}`);
+        //scribble.extra(`Content[${tag}]: ${fileSpec}, ${stats && stats.isDirectory() ? 'DIR' : 'FILE'}`);
+        scribble.extra(`Content[${tag}]: ${fileSpec}, ${stats ? (stats.isDirectory() ? 'DIR' : 'FILE') : '???'}`);
         if (!stats || stats.isSymbolicLink()) return await ctx.next();  // not found (or found link), continue looking
         if (stats.isDirectory()) {
             if (!indexing) throw 403;

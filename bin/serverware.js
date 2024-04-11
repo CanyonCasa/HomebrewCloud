@@ -12,12 +12,11 @@
 ///*************************************************************
 const fs = require('fs');
 const qs = require('querystring');
-const { asBytes, asList, base64, hash, jxFromCircular, jxFrom, jxTo, print, resolveSafePath, 
-    uniqueID, verifyThat } = require('./helpers');
-const { auth, httpStatusMsg, jwt, logins, statistics, mimeType } = require('./workers');  
 const pathMatch = require("path-to-regexp").match;
 const { sniff } = require('./streams');
-
+const { asBytes, asList, jxFromCircular, jxFrom, jxTo, parseURL, print, resolveSafePath, uniqueID } = require('./helpers');
+const { httpStatusMsg, statistics, mimeType } = require('./workers');  
+const { authenticate } = require('./authware');
 
 ///*************************************************************
 /// declarations...
@@ -43,16 +42,16 @@ serverware.ResponseContext = ResponseContext;
 serverware.createContext = () => ({
     // prototype for creating request context ...
     // consider only state as mutatable property; otherwise assume read-only values
-    request: null,          // request placeholder
-    state: {},              // custom middleware state data, app specific
-    authenticated: false,   // request authenticated
-    authorize: ()=>false,   // default, overridden in context when user authenticated
-    jwt: '',                // JSON web token
-    user: {                 // validated user info, default, overridden in context when user authenticated
-        member: '',         // default group membership
-        username: ''        // default username
+    request: null,              // request placeholder
+    state: {},                  // custom middleware state data, app specific
+    authenticated: false,       // request authenticated
+    authorize: (a)=>['',null,undefined].includes(a),   // default, overridden in context when user authenticated
+    jwt: '',                    // JSON web token
+    user: {                     // validated user info, default, overridden in context when user authenticated
+        member: '',             // default group membership
+        username: ''            // default username
     },
-    headers: function hdrs(obj={}) {    // headers function sets or get response headers (internally)
+    headers: function hdrs(obj={}) {    // headers function sets or gets response headers (internally)
         hdrs._hdrs=hdrs._hdrs||{}; obj.mapByKey((v,k)=>hdrs._hdrs[k.toLowerCase()]=v); 
         return hdrs._hdrs.filterByKey(v=>v!==undefined);
     },
@@ -64,37 +63,6 @@ serverware.createContext = () => ({
 });
 
 /**
-* @function parseAuthHeader parses the Authorization header into parts used downstream
-* @param {string} header - the Authorization header
-* @reutrn {object} header object on success or {} on failure
-*/
-let parseAuthHeader = async (header) => {
-    if (!header) throw { code: 401, msg: `Malformed Authorization header: ${header}` };
-    let hdr = { header: header, tokens: (header+" ").split(/\s+/,2) };
-    [hdr.method, hdr.token] = [hdr.tokens[0].toLowerCase(), hdr.tokens[1]];
-    if (hdr.method=='basic') {
-        hdr.text = base64.d64(hdr.token);
-        [hdr.username, hdr.pw] = (hdr.text+':').split(':',2);
-    } else if (hdr.method=='bearer') {
-        hdr.fields = jwt.extract(hdr.token);    // just parse header!
-        hdr.username = (hdr.fields.payload||{}).username||'';
-    } else {
-        throw { code: 401, msg: `Authentication Method Not Supported!: ${header}` };
-    };
-    return hdr;
-};
-
-let urlParse = (url) => {
-    let tmp = new URL(url); // returns a class of getters and setters
-    let protocol = tmp.protocol.replace(':','');
-    let query = {};
-    let pObj = tmp.searchParams;
-    for (let k of pObj.keys()) { query[k]= pObj.getAll(k).length<2 ? pObj.get(k) : pObj.getAll(k); };
-    return { href: tmp.href, origin: tmp.origin, protocol: protocol, host: tmp.host, hostname: tmp.hostname,
-        port: tmp.port || (protocol=='https' ? 443 : 80), pathname: tmp.pathname, search: tmp.search, query: query };
-};
-
-/**
  * @function parseRequestHeaders build context request properties ...
  * @param {Object} req - http request object
  * @param {buffer} buf - res data buffer
@@ -103,7 +71,7 @@ let urlParse = (url) => {
 let parseRequestProperties = (req) => {
     let [contentType, boundary] = (req.headers['content-type'] || 'text/*').split('; ');
     let debug = req.url.endsWith('!');
-    let protocol = req.headers['x-forwarded-proto'] || 'http';
+    let protocol = (req.headers['x-forwarded-proto'] || 'http');
     let host = req.headers['x-forwarded-host'] || req.headers.host || '';
     let url = debug ? req.url.slice(0,-1) : req.url;
     let rx = {
@@ -120,7 +88,7 @@ let parseRequestProperties = (req) => {
           contentType=='application/octet-stream' ? 'octet' : '',
         original: { host: host, href: `${protocol}://${host}${url}`, protocol: protocol, url: url }
     };
-    rx.mergekeys(urlParse(rx.original.href));
+    rx.mergekeys(parseURL(rx.original.href));
     let verbChk = (v,m) => v==m || (v=='get'&&m=='head') || v=='any';
     let verbIs = vs=>asList(vs).some(v=>verbChk(v.toLowerCase(),rx.method));
     return { debug: debug, request: rx, verbIs: verbIs };
@@ -132,65 +100,6 @@ let urlRewrite = (rules,url) => {
     let tmp = url;
     rules.forEach(r=>{tmp = tmp.replace(r.pattern,r.replace)});
     return { changed: tmp!==url, url: tmp };
-};
-
- /**
- * @function authorize validates an authenticated user's access to a particular resource based on group memebership
- * @param {string|array} allowed - list of groups allowed permission to the resource
- * @param {string|array} memberOf - list of groups of which user is a member
- * @return {boolean} indicates user's permission 
- */
-let authorize = (allowed,memberOf) => { // user authenticated if this gets called; otherwise default "()=>false" gets called!
-    if (allowed===undefined || allowed.includes('users')) return true;
-    let granted = asList(allowed);
-    let membership = asList(memberOf);
-    return  membership.some(m=>granted.includes(m)) || membership.includes('admin');
-};
-
-/**
-* @function auth performs user authentication based on the authorization header
-* @param {object} [options]
-* @return {object} middleware
-*/
-async function authenticate(ctx) {
-    let self = this;
-    let usersDB = self.db.users;
-    let scribble = this.scribe;
-    scribble.trace(`authenticate: ${print(ctx.request.HEADERS.authorization,100)}`);
-    let header = await parseAuthHeader(ctx.request.HEADERS.authorization);  // always needed for authentication
-    if (header.method==='bearer') { // JWT authentication requested
-        if (!jwt.verify(header.token)) logins.log(header.username,'failed JWT', { code: 401, msg: 'Expired or Invalid JWT credentials' });
-        ctx.user = header.fields.payload;  // valid JWT so authentication valid
-        logins.log(ctx.user.username,'bearer');
-    } else if (header.method==='basic') { // Basic authentication requested (i.e. login)
-        if (!header.username && !header.pw) logins.log(header.username,'failed invalid', { code: 401, msg: 'Invalid authentication credentials' });
-        let user = usersDB.getUser(header.username);
-        if (verifyThat(user,'isEmpty')) logins.log(header.username,'failed user', { code: 401, msg: 'Invalid user credentials' });
-        if (user.status!=='ACTIVE') logins.log(user.username,'failed inactive', { code: 401, msg: 'Inactive user' });
-        let valid = (await auth.checkPW(header.pw,user.credentials.hash)) ||    // may be a password (hash) login
-            auth.checkCode(header.pw,user.credentials.passcode);                // or a passcode login
-        ////////////////////////////////////////////////////////////////
-        // TEMPORARY PATCH FOR BACK COMPATIBILITY WITH PRIOR HOMEBREW CODE
-        if (!valid) {   // may be old format of pre-hashed pw...
-            let oldChallenge = hash(header.username+header.pw);
-            valid = await auth.checkPW(oldChallenge,user.credentials.hash);
-            if (valid) {    // update credentials
-                user.credentials.oldHash = user.credentials.hash;
-                user.credentials.hash = await auth.genHashPW(header.pw);
-                scribble.trace(`authenticate: updating ${user.username} credentials `);
-                usersDB.chgUser(user.username,{credentials: user.credentials});
-            }
-        ////////////////////////////////////////////////////////////////
-        };
-        if (!valid) logins.log(user.username,'failed login', { code: 401, msg: 'Authentication failed!' });
-        delete user.credentials; // remove sensitive user information
-        ctx.user = user;
-        logins.log(ctx.user.username,'basic');
-    };
-    // only get here if user has been authenticated; other methods will be rejected in parseAuthHeader
-    ctx.authenticated = header.method;  
-    ctx.authorize = (allowed,membership=ctx.user.member) => authorize(allowed,membership);
-    scribble.trace(`authenticate: ${ctx.user.username} => ${ctx.user.member}`);
 };
 
 /// Body parsers...
@@ -463,7 +372,7 @@ serverware.router = async function(ctx) {
 };
 
 
-///*************************************************************
+/// *************************************************************
 /// Request, response and error handling...
 
 serverware.defineRequestPreprocessor = function(cfg={}) {
@@ -473,18 +382,21 @@ serverware.defineRequestPreprocessor = function(cfg={}) {
     let opts = { temp: '../tmp', limits: {request: '64K', upload: '10M'},
       log: "RQST[${ctx.request.method}]: ${ctx.request.href}" }.mergekeys(cfg.options);
     let prompt = (msg,vars) => new Function("let ctx=this; return `"+msg+"`;").call(vars);  // ctx->vars->this->ctx
-    let bodyParseOptions = {temp: resolveSafePath(opts.temp), 
+    let bodyParseOptions = {temp: resolveSafePath(opts.temp),
         limits: { request: asBytes(opts.limits.request), upload: asBytes(opts.limits.upload) }};
     if (!fs.existsSync(bodyParseOptions.temp)) fs.mkdirSync(bodyParseOptions.temp);
-    
-    return async function requestProcessor(req,ctx) {   
-        scribble.trace('requestProcessor entered');
+
+    return async function requestProcessor(req,ctx) {
+        scribble.extra('requestProcessor entered...');
         let props = parseRequestProperties(req);    // parse request properties
         ctx.mergekeys(props);
+        scribble.extra(`authenticating: ${authenticating}, authorization: ${ctx.request.HEADERS['authorization']}`);
         if (authenticating && 'authorization' in ctx.request.HEADERS) await authenticate.call(self,ctx);
+        scribble.extra(`authorize: ${ctx.authorize()}`);
         scribble.log(prompt(opts.log,ctx));         // log request
         if (ctx.verbIs('post,put,patch')) {
             if (ctx.authorize() || ctx.request.pathname.startsWith('/user/')) {   // any authenticated user or new user
+                scribble.extra('parsing body...');
                 await bodyParse.call(self,req,ctx,bodyParseOptions);
                 scribble.trace(`body data type: ${ctx.request.dataType}`);
             } else {
@@ -495,7 +407,7 @@ serverware.defineRequestPreprocessor = function(cfg={}) {
         if (opts.rewrite) {
             let rewrite = urlRewrite(opts.rewrite,ctx.request.href);
             if (rewrite.changed) {
-                ctx.request.mergekeys(urlParse(rewrite.url));
+                ctx.request.mergekeys(parseURL(rewrite.url));
                 scribble.log(`REWRITE -> ${rewrite.url}`);  // log rewrite
             };
         };
@@ -513,7 +425,7 @@ serverware.defineResponseProcesser = function(cfg={}) {
     let scribble = this.scribe;
 
     return async function processResponse(ctx,res) {
-        scribble.trace('processResponse entered...');
+        scribble.extra('processResponse entered...');
         if (ctx.verbIs('head')) {
             ctx.headers(ctx.data.headers);
             ctx.headers().mapByKey((v,h)=>res.setHeader(h,v));   // set response headers

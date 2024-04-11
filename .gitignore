@@ -1,10 +1,10 @@
-restricted/*.js*
-restricted/*.sq3
+restricted/
 bin/node_modules
 bin/x*.js
 *workspace
 bin/convert*.js
 shack
 site/*
+sites/*
 test*
 *.log

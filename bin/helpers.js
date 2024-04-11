@@ -14,6 +14,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const URL = require('url').URL;
+const querystring = require('querystring');
 const ansiStyle = require('./colorStyles');
 const jsonSafe = require('./SafeData').jsonSafe;
 
@@ -223,6 +225,32 @@ helpers.pad = (str,len,ch=' ',left=false) => left ? (Array(len+1).join(ch)+Strin
   (String(str)+Array(len+1).join(ch)).slice(0,len);
 
 /**
+ * @function parseURL WHAT WG URL parsing wrapper
+ * @param {string} url to parse
+ * @param {string} part to return; default a URL object of all parts.
+ * @return {any} - parsed URL object
+ */
+helpers.parseURL = (url) =>{
+    let tmp = {};
+    try {
+        tmp = new URL(url); // absolute URL, returns a class of getters and setters
+        tmp = ['href','origin','protocol','username','password','host','hostname','port','pathname','search','searchParams','hash']
+            .reduce((t,n)=>{t[n]=tmp[n]; return t},{}); // convert to simple object
+        if (tmp.searchParams)
+            tmp.query = Array.from(tmp.searchParams.keys()) // aggregates redundant params, i.e. ?ck=1&ck=2 
+                .reduce((q,k)=>{let a=tmp.searchParams.getAll(k);q[k]=a.length<2?a[0]:a; return q},{});
+    } catch(e) {
+        try {
+            let [pathname,search] = url.split('?');
+            let query = querystring.parse(search); // relative URL
+            tmp.mergekeys({pathname,search,query});
+        } catch(e) {console.error(e)};
+    };
+    tmp.port = tmp.port || (tmp.protocol=='https:' ? 443 : (tmp.protocol=='http:' ? 80:'')); // fill in default port
+    return tmp;
+};
+
+/**
  * @function print returns a simple (non--verbose) serialized variable for logging
  * @param {any} x - serialized variable
  * @param {object} options - options:
@@ -313,13 +341,14 @@ helpers.uniqueID = (n=8,b=36) => {let u=''; while(u.length<n) u+=Math.random().t
 /**
  * @function verifyThat deterimes a number of complex variable types
  * @param {*} variable - input variable tested
- * @param {string} isType - choice of type to test; values include: 'isTrueObject', 'isArray','isArrayOfTrueObjects', 
+ * @param {string} isType - choice of type to test; values include: 'isTrueObject', 'isAnyObject', 'isArray','isArrayOfTrueObjects', 
  * 'isArrayOfAnyObjects', 'isArrayOfArrays', 'isEmptyObject', 'isScalar', 'isNotEmpty', 'isDefined' , 'isNotDefined'}
  * @return {boolean} - result of testing variable isType
  */
 helpers.verifyThat = (variable,isType) => {
     switch (isType) {
         case 'isTrueObject': return (typeof variable=='object') && (variable!==null)  && !(variable instanceof Array);
+        case 'isAnyObject': return (typeof variable=='object');
         case 'isArray': return (variable instanceof Array);
         case 'isArrayOfTrueObjects': return (variable instanceof Array) && helpers.verifyThat(variable[0],'isTrueObject');
         case 'isArrayOfAnyObjects': return (variable instanceof Array) && (typeof variable[0]==='object');

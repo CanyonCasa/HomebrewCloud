@@ -24,6 +24,7 @@ const { asList, asStyle, asTimeStr, base64:x64, hmac, jxTo, pad, print, uniqueID
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const { resolve } = require('dns');
+const { ExportConfigurationInstance } = require('twilio/lib/rest/bulkexports/v1/exportConfiguration');
 
 
 ///*************************************************************
@@ -175,12 +176,12 @@ workers.httpStatusMsg = error => {
  * @param {string} secret - encryption secret key, defaults to configured value of 256-bit unique value at startup
  * @returns {object} JWT payload if valid, null if invalid
  */
-let cfgJWT = {expiration: 60*24, secret: uniqueID(64,16), renewal: false}   // sets defaults
+let cfgJWT = {expiration: 60*24, secret: uniqueID(64,16), renewal: false}   // sets defaults; override on initial workers call w/cfg
 workers.jwt = {
     //cfg: {expiration: 60*24, secret: uniqueID(64,16), renewal: false},  // sets defaults
     create: (data,secret,expiration) => {
         // payload always includes 'initiated at' (iat) and expiration in minutes (exp), plus data
-        let exp = expiration*60 || data.exp || cfgJWT.expiration*60;   // expiration in seconds
+        let exp = expiration===null ? 0 : expiration*60 || data.exp || cfgJWT.expiration*60;   // expiration in seconds
         let payload = Object.assign({},data,{ iat: new Date().valueOf()/1000|0, exp: exp, ext: cfgJWT.renewal});
         let encHeader = x64.j64u({alg: 'HS256',typ: 'JWT'});  // only support for HS256
         let encPayload = x64.j64u(payload);
@@ -189,6 +190,7 @@ workers.jwt = {
     },
     expired: (payload) => {  // accepts decoded payload object; returns true if expired
         let { exp, iat } = payload;   // initiated at and expiration times in seconds
+        if (!exp) return false;
         let expDate = new Date(1000*(iat + exp));
         return expDate < new Date();    // exp < now == false if not expired
     },
@@ -214,7 +216,6 @@ workers.jwt = {
  * @param {object} [lnks] - follows links as files and directories if true, else as links (ignored)
  * @return {object} stats for the given file system object
  */
-
 async function safeAccess(spec,flgs) { 
     let flags = {f:FS.F_OK, r:FS.R_OK, w:FS.W_OK, x:FS.X_OK };
     let fx = (flgs||'').split('').map(f=>flags[f]).reduce((a,c)=>a|c,flags.f);
@@ -355,11 +356,11 @@ var scribe = {
     label: 'SCRIBE  ',  // tag formatted for output
     level: 3,           // rank equivalent for defined mask
     // note levels, styles, and text must track
-    levels: ['dump', 'trace', 'debug', 'log', 'info', 'warn', 'error', 'fatal', 'note', 'flush'],
+    levels: ['dump', 'extra', 'trace', 'debug', 'log', 'info', 'warn', 'error', 'fatal', 'note', 'flush'],
     rank: lvl => scribe.levels.indexOf(lvl),
-    styles: [['gray','dim'], ['magenta','bold'], ['cyan','bold'], ['white'], ['green'], ['yellow','bold'], 
-        ['red','bold'], ['bgRed','white','bold'], ['gray'], ['bgCyan','black']],
-    text: ['DUMP ', 'TRACE', 'DEBUG', 'LOG  ', 'INFO ', 'WARN ', 'ERROR', 'FATAL', 'NOTE ', 'FLUSH'],
+    styles: [['gray','dim'], ['magenta'], ['magenta','bold'], ['cyan','bold'], ['white'], ['green'], 
+        ['yellow','bold'], ['red'], ['bgRed','white','bold'], ['brightBlue'], ['bgCyan','black']],
+    text: ['DUMP ', 'EXTRA', 'TRACE', 'DEBUG', 'LOG  ', 'INFO ', 'WARN ', 'ERROR', 'FATAL', 'NOTE ', 'FLUSH'],
     toTranscript: function(text,flush) {
         scribe.buffer += text + (flush ? '\n\n' : '\n');    // extra linefeed for "page-break" when flushing
         if ((scribe.buffer.length>scribe.transcript.bsize) || flush) 
@@ -398,7 +399,8 @@ scribe.mask('log'); // default level
 const scribePrototype = {
     mask: scribe.mask,
     dump: function(...args) { if (scribe.verbose) scribe.write(this.label,'dump',args) },   // always transcript only, no console output
-    trace: function(...args) { scribe.write(this.label,'trace',args) },
+    extra: function(...args) { scribe.write(this.label,'extra',args) }, // verbose trace
+    trace: function(...args) { scribe.write(this.label,'trace',args) }, // verbose debug
     debug: function(...args) { scribe.write(this.label,'debug',args) },
     log: function(...args) { scribe.write(this.label,'log',args) },
     info: function(...args) { scribe.write(this.label,'info',args) },

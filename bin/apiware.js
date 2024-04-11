@@ -22,8 +22,12 @@ const jsonata = require('jsonata');
 
 ///*************************************************************
 /// declarations...
-var apiware = {};               // serverware middleware container    
-
+// serverware middleware container    
+var apiware = {
+	routes: {	// default routes
+		api: '/:prefix([$@!~]):recipe/:opts*'
+	}
+};
 
 ///*************************************************************
 /// apiware Homebrew API handler
@@ -137,25 +141,29 @@ function twilio(ctx) {
 };
 
 
-async function recall(db,ctx) {
+async function ask(db,ctx) {
     let scribble = this.scribe;
-    scribble.trace(`recall: ${ctx.args.recipe} ${print(ctx.args)}`);
+    scribble.trace(`ask: ${ctx.args.recipe} ${print(ctx.args)}`);
     let recipe = db.lookup(ctx.args.recipe||'');    // get recipe
     scribble.trace(`recipe: ${print(recipe,60)}`);
     if (verifyThat(recipe,'isEmpty')) return await ctx.next();
     let auth = recipe.auth instanceof Array ? recipe.auth[0] : recipe.auth;
     if (auth && !ctx.authorize(auth)) throw 401;  // check auth
-    return db.query(recipe,{}.mergekeys(ctx.args),ctx.user);     // query db
+    if (!recipe.file) return db.query(recipe,{}.mergekeys(ctx.args),ctx.user);     // synchronous query from loaded db
+    scribble.trace(`ask: asynchronous response...`);
+    return await db.recall(recipe,{}.mergekeys(ctx.args),ctx.user);	// async external db operation
 };
 
-async function store(db,ctx) {
+async function tell(db,ctx) {
     let scribble = this.scribe;
-    scribble.trace(`store: ${ctx.args.recipe} ${print(ctx.args)}`);
+    scribble.trace(`tell: ${ctx.args.recipe} ${print(ctx.args)}`);
     let recipe = db.lookup(ctx.args.recipe||'');    // get recipe
     if (verifyThat(recipe,'isEmpty')) return await ctx.next();
     let auth = recipe.auth instanceof Array ? recipe.auth[1] : recipe.auth;
     if (auth && !ctx.authorize(auth)) throw 401;  // check auth
-    return db.modify(recipe,ctx.request.body,ctx.user);
+	if (!recipe.file) return db.modify(recipe,ctx.request.body,ctx.user);
+    scribble.trace(`tell: asynchronous response...`);
+    return await db.store(recipe,ctx.request.body,ctx.user);	// async external db operation
 };
 
 async function patch(db,ctx) {
@@ -316,19 +324,20 @@ apiware.api = function api(options={}) {
     return async function apiCW(ctx) {
         scribble.trace(`api route[${ctx.routing.route.method}]: ${ctx.routing.route.route}`);
         switch (ctx.request.params.prefix) {
-            case '$': 
-                if (ctx.verbIs('get')) return await recall.call(site,db,ctx)
-                if (ctx.verbIs('post,put')) return await store.call(site,db,ctx);
+            case '$':
+                if (ctx.verbIs('get')) return await ask.call(site,db,ctx)
+                if (ctx.verbIs('post,put')) return await tell.call(site,db,ctx);
                 if (ctx.verbIs('patch')) return await patch.call(site,db,ctx)
                 throw 405;
             case '@':   // built-in actions (defined as 'recipe' paramter field)
+                scribble.trace(`${ctx.request.method}: ${ctx.request.params.recipe} =>${ctx.request.body}`);
                 if (ctx.request.method!=='post') throw 405;
                 switch (ctx.request.params.recipe) {
                     case "scribe": return scribeMask.call(site,ctx);
-                    case "mail": 
+                    case "mail":
                         if (!ctx.authorize('contact')) throw 401;
                         return await sendMail.call(site,ctx.request.body||{});
-                    case "text": 
+                    case "text":
                         if (!ctx.authorize('contact')) throw 401;
                         return await sendText.call(site,ctx.request.body||{});
                     case "twilio": return new ResponseContext('xml',Buffer.from(twilio.call(site,ctx)));
