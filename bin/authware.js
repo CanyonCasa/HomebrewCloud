@@ -11,8 +11,10 @@ const { auth, jwt, logins } = require('./workers');
  */
 let addUserCandy = (db) => {
     let proto = Object.getPrototypeOf(db);
-    proto.getUser = function getUser(usr) { return this.query('userByUsername',{username:usr.toLowerCase()}) };
-    proto.chgUser = function chgUser(usr,data) { return this.modify('users',[{ref: usr.toLowerCase(), record: data}]) };
+	if (!proto.getUser) {
+		proto.getUser = function getUser(usr) { return this.query('userByUsername',{username:usr.toLowerCase()}) };
+		proto.chgUser = function chgUser(usr,data) { return this.modify('users',[{ref: usr.toLowerCase(), record: data}]) };
+	};
     return db;
 };
 

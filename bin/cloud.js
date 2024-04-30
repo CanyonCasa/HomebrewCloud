@@ -6,7 +6,7 @@ endpoint behind Apache on AWS Lightsail. It eliminates the reverse proxy,
 deligating that role to the Apache server installed with the Lightsail 
 blueprint. See HomebrewCloud readme for setup details,as well as 
 HomebrewDIY documentation for more operational details.
-issued: 20221110 by CanyonCasa, (c)2022 Enchanted Engineering, Tijeras NM.
+issued: 20240429 by CanyonCasa, (c)2024 Enchanted Engineering, Tijeras NM.
 
 cloud.js: This script defines the backend app that implements a single host 
 endpoint. Assumed operation behind https proxy, it includes most features of 
@@ -42,7 +42,7 @@ const http = require('http');
 const cfg = require(process.argv[2] || '../restricted/config');
 
 // low level libraries; both helpers and workers MUST be called first from cloud.js for correct operation...
-const { $VERSION } = require('./helpers');  // low level utility functions  
+const { $VERSION, jxFrom, markTime} = require('./helpers');   // low level utility functions  
 const { Scribe, sms, statistics } = require('./workers')(cfg.workers);  // high level (complex) functions
 const scribe = Scribe(cfg.workers.scribe);  // main Scribe instance
 
@@ -50,11 +50,12 @@ const jxDB = require('./jxDB');             // simple JSON based database librar
 const { addUserCandy } = require('./authware');
 
 // middleware libraries...
-const serverware = require('./serverware'); // built-in server functions, request parser, router, and response handler, ...
-const nativeware = require('./nativeware'); // application built-in middleware functions, including (static) content handler
-const apiware = require('./apiware');       // Homebrew API middleware handler
+const serverware = require('./serverware');         // built-in server functions, request parser, router, and response handler, ...
+const nativeware = require('./nativeware');         // application built-in middleware functions, including (static) content handler
+const apiware = require('./apiware');            // Homebrew API middleware handler
 // optional custom user middleware (highest precedence), defined as empty module if not found, overrides native and api functions
 const customware = (()=>{ try { return require('./customware'); } catch (e) { return {}; }; })();   // IIFE
+
 
 // message identifiers...
 const VERSION = cfg.$VERSION || $VERSION;
@@ -71,18 +72,19 @@ let tag = scfg.tag || 'cloud';
 scribe.debug(`HomebrewCloud site '${tag}' setup...`);
 
 scfg.headers = {"x-powered-by": "HomebrewCloud "+VERSION}.mergekeys(scfg.headers);
-app.mergekeys({cfg: scfg, db: {}, routes: [], scribe: Scribe(tag), tag: tag});
+app.mergekeys({cfg: scfg, routes: [], tag: tag, db: {}});
 scfg.databases.mapByKey((def,tag)=>{
     def.tag = def.tag || tag;       // ensure a defined tag
     scribe.trace(`Connecting db[${tag}] ...`);
     app.db[tag] = new jxDB(def);    // establish database
 });
-// add syntax candy to database prototype...
-if (app.db.users) addUserCandy(app.db.users);
+app.scribe = Scribe(tag);
 
 // authentication setup required by auth & account middleware
 app.authenticating = !(scfg.options===null || scfg.options?.auth === null);
 if (app.authenticating && !app.db.users) scribe.fatal('Users database not found, required for authentication');
+// add syntax candy to database prototype...
+if (app.db.users) addUserCandy(app.db.users);
 
 // build app handlers and routers...
 let [appNativeware, appAPIware, appCustomware] = [nativeware, apiware, customware].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(app) : v));  // bind f()'s to App scope
@@ -96,16 +98,18 @@ if (cors!==null) addRoute('any','',appNativeware.cors(cors));
 if (app.authenticating) {
     customizeRoute(account, appNativeware.routes.account);
     addRoute('any',account.route,appNativeware.account(account));
-    customizeRoute(login, apiNativeware.routes.login);
+    customizeRoute(login, appNativeware.routes.login);
     addRoute('any',login.route,appNativeware.login(login));
 };
 // custom handlers specified by configuration...
 handlers.forEach(h=>{
     let { code='', method='any', route='' } = h;
-    let codeWare = appCustomware[code] || appAPIware[code] || appNativeware[code] || null;
+    let codeWare = appCustomware[code] ? appCustomware : appAPIware[code] ? appAPIware :
+        appNativeware[code] ? appNativeware : null;
+    //let codeWare = appCustomware[code] || appAPIware[code] || appNativeware[code] || null;
     if (codeWare) {
-		customizeRoute(h,codeWare?.routes[h.code]);
-		addRoute(method.toLowerCase(),h.route,codeWare(h));
+      customizeRoute(h,codeWare?.routes[h.code]);
+      addRoute(method.toLowerCase(),h.route,codeWare[code](h));
 	};
 });
 if (root) addRoute('get','',appNativeware.content({root:root}));  // default open static server, if site root defined
@@ -117,7 +121,7 @@ let handleError = serverware.defineErrorHandler.call(app,app.cfg);
 try {
     http.createServer(async (req,res) => { // Instantiate the HTTP server with async request handler...
         // app code called for each http request...
-        let ctx = serverware.createContext();               // define context for the request response
+        let ctx = serverware.createContext();                       // define context for the request response
         ctx.headers(app.cfg.headers);                       // append site specific headers to context
         try {                                               // wrap all processing to trap all errors
             await prepRequest(req,ctx);                     // parse request headers and body, optionally authenticate

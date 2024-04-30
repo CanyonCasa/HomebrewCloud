@@ -16,11 +16,11 @@ const jxDB = require('./jxDB');
 const { addUserCandy } = require('./authware');
 
 // middleware libraries...
-const sw = require('./serverware');         // built-in server functions, request parser, router, and response handler, ...
-const nw = require('./nativeware');         // application built-in middleware functions, including (static) content handler
-const aw = require('./apiware');            // Homebrew API middleware handler
+const serverware = require('./serverware'); // built-in server functions, request parser, router, and response handler, ...
+const nativeware = require('./nativeware'); // application built-in middleware functions, including (static) content handler
+const apiware = require('./apiware');       // Homebrew API middleware handler
 // optional custom user middleware (highest precedence), defined as empty module if not found, overrides native and api functions
-const cw = (()=>{ try { return require('./customware'); } catch (e) { return {}; }; })();   // IIFE
+const customware = (()=>{ try { return require('./customware'); } catch (e) { return {}; }; })();   // IIFE
 
 /**
  * @module App constructor for basic HomebrewDIY application
@@ -39,7 +39,7 @@ function App(context) {
     if (this.db.users) addUserCandy(this.db.users);
     this.build();       // build route table...
     this.start();       // start the server...
-    this.scribe.debug(`HomebrewDIY App initialized`);
+    this.scribe.debug(`HomebrewDIY/HomebrewCloud App initialized`);
 };
 
 /**
@@ -47,24 +47,32 @@ function App(context) {
  */
 App.prototype.build = function() {
     let routeTable = this.routes;
-    let [anw, aaw, acw] = [nw, aw, cw].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(this) : v));  // bind f()'s to App scope
-    function addRoute (method,route,afunc) { sw.addRoute(routeTable,method||'',route,afunc); };
+    let [appNativeware, appAPIware, appCustomware] = [nativeware, apiware, customware].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(this) : v));  // bind f()'s to App scope
     let { handlers=[], options={}, root } = this.cfg;
-    let { account={}, analytics, cors, login } = options===null ? { analytics: null, cors: null } : options;
+    let { account={}, analytics, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
+    function customizeRoute (cfg,defaultRoute) { cfg.route = cfg.route || defaultRoute || ''; return cfg; }
+    function addRoute (method,route,afunc) { serverware.addRoute(routeTable,method||'',route,afunc); };
     // create and build middleware stack starting with priority built-in configurable features...
-    if (analytics!==null) addRoute('any','',anw.logAnalytics(analytics));   // all routes
-    if (cors!==null) addRoute('any','',anw.cors(cors));                     // all routes
+    if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));   // all routes
+    if (cors!==null) addRoute('any','',appNativeware.cors(cors));                     // all routes
     if (this.authenticating) {
-        addRoute('any','/user/:action/:user?/:opt?',anw.account(account));  // hardwired route
-        addRoute('any','/:action(login|logout)',anw.login(login));          // hardwired route
+        customizeRoute(account, appNativeware.routes.account);
+        addRoute('any',account.route,appNativeware.account(account));  // hardwired route
+        customizeRoute(login, appNativeware.routes.login);
+        addRoute('any',login.route,appNativeware.login(login));          // hardwired route
     };
     // custom handlers and routes specified by configuration...
     handlers.forEach(h=>{
         let { code='', method='any', route='' } = h;
-        let codeWare = acw[code] || aaw[code] || anw[code] || null;
-        if (codeWare) addRoute(method.toLowerCase(),route,codeWare(h));
+        //let codeWare = appCustomware[code] || appAPIware[code] || appNativeware[code] || null;
+        let codeWare = appCustomware[code] ? appCustomware : appAPIware[code] ? appAPIware : 
+            appNativeware[code] ? appNativeware : null;
+        if (codeWare) {
+            customizeRoute(h,codeWare?.routes[h.code]);
+            addRoute(method.toLowerCase(),h.route,codeWare[code](h));
+        };
     });
-    if (root) addRoute('get','',anw.content({root:root}));  // default open static server, if site root defined
+    if (root) addRoute('get','',appNativeware.content({root:root}));  // default open static server, if site root defined
 };
 
 /**
@@ -73,19 +81,19 @@ App.prototype.build = function() {
 App.prototype.start = function start() {
     try {
         let siteHeaders = {}.mergekeys(this.shared.headers).mergekeys(this.cfg.headers); // merge server and site headers
-        let prepRequest = sw.defineRequestPreprocessor.call(this,this.cfg);
-        let sendResponse = sw.defineResponseProcesser.call(this,this.cfg);
-        let handleError = sw.defineErrorHandler.call(this,this.cfg);
+        let prepRequest = serverware.defineRequestPreprocessor.call(this,this.cfg);
+        let sendResponse = serverware.defineResponseProcesser.call(this,this.cfg);
+        let handleError = serverware.defineErrorHandler.call(this,this.cfg);
     try {
         http.createServer(async (req,res) => { // Instantiate the HTTP server with async request handler...
             // this code called for each http request...
-            let ctx = sw.createContext();                       // define context for the request response
-            ctx.headers(siteHeaders);                           // append site specific headers to context
-            try {                                               // wrap all processing to trap all errors
-                await prepRequest(req,ctx);                     // parse request headers and body, optionally authenticate
-                ctx.data = await sw.router.call(this,ctx);      // route context through middleware chain, return data
-                await sendResponse(ctx,res);                    // return response to client
-            } catch(err) { await handleError(err,ctx,res); };   // handle any error that occurs
+            let ctx = serverware.createContext();                   // define context for the request response
+            ctx.headers(siteHeaders);                               // append site specific headers to context
+            try {                                                   // wrap all processing to trap all errors
+                await prepRequest(req,ctx);                         // parse request headers and body, optionally authenticate
+                ctx.data = await serverware.router.call(this,ctx);  // route context through middleware chain, return data
+                await sendResponse(ctx,res);                        // return response to client
+            } catch(err) { await handleError(err,ctx,res); };       // handle any error that occurs
         }).listen(this.cfg.port);
         this.scribe.info(`HomebrewDIY App running on ${this.cfg.host}:${this.cfg.port}`);
     } catch(e) { this.scribe.fatal(`HomebrewDIY App failed to start --> ${e.toString()}`) };
