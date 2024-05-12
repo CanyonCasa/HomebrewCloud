@@ -60,7 +60,7 @@ function wsApp(config) {
         const ref = parameters.name || id;
         const metadata = { id, ref, hb, ...parameters };
         this.clients.set(ws,{ws:ws, ref: ref, metadata:metadata, publish: [], subscribe: [], init: false});
-        setTimeout(()=>{ this.huntZombie(ws) },5000);   // destroy connection if not initialized in 5 seconds...
+        setTimeout(()=>{ this.huntZombie(ws) },30000);   // destroy connection if not initialized in 30 seconds...
         this.scribble.trace(`Websocket connection ${ref} established...`)
 
         ws.on('error',(e)=>{
