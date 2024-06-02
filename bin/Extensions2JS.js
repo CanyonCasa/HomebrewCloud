@@ -49,7 +49,7 @@ if (!Date.prototype.style)
  *  mm:         minutes part hour, padded, i.e. 07
  *  s:          seconds past minute, i.e. 5
  *  ss:         seconds past minute, padded, i.e. 05
- *  x:          milliseconds, i.e. 234
+ *  x:          milliseconds, number, i.e. 234, but always appears in string as 3 digits, i.e. leading zeros
  *  a:          meridiem flag, i.e. AM or PM
  *  z:          time zone offset from UTC in hours, i.e. -6
  *  e:          Unix epoch, seconds past midnight Jan 1, 1970
@@ -120,8 +120,8 @@ Date.prototype.style = function(frmt,realm) {
                 return dx.style(STYLE.formats[fields[0]]);
             };
             // any arbitrary format...
-            let pad = (s) => ('0'+s).slice(-2);
-            let tkn = dx.style(); tkn['YYYY']=tkn.Y; tkn['hh']=('0'+tkn['h']).substr(-2); if (tkn['h']>12) tkn['h']%=12;
+            let pad = (s,d=2) => ('00'+s).slice(-d);
+            let tkn = dx.style(); tkn['YYYY']=tkn.Y; tkn['hh']=pad(tkn['h']); if (tkn['h']>12) tkn['h']%=12; tkn['x']=pad(tkn['x'],3);
             return (frmt).replace(STYLE.RE,$0=>$0 in tkn ? tkn[$0] : $0.slice(1) in tkn ? pad(tkn[$0.slice(1)]) : $0.slice(1,-1));
     };
 };

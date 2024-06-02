@@ -8,3 +8,4 @@ site/*
 sites/*
 test*
 *.log
+bin/bug.txt
