@@ -35,7 +35,7 @@ function App(context) {
     (context.cfg.databases||{}).mapByKey((def,tag)=>{ def.tag = def.tag || tag; this.db[tag] = new jxDB(def); }); // add new db's
     // authentication setup required by auth & account middleware
     this.authenticating = !(context.cfg.options===null || context.cfg.options?.auth === null);
-    if (this.authenticating && !this.db.users) self.scribe.fatal('Users database not found, required for authentication');
+    if (this.authenticating && !this.db.users) this.scribe.fatal('Users database not found, required for authentication');
     if (this.db.users) addUserCandy(this.db.users);
     this.build();       // build route table...
     this.start();       // start the server...
