@@ -128,7 +128,6 @@ if (!Date.prototype.style) Date.prototype.style = function(frmt,realm) {
             let tkn = dx.style();   // create substituion tokens object and then embellish
             tkn['YYYY']=tkn.Y; tkn['hh']=pad(tkn['h']); if (tkn['h']>12) tkn['h']%=12; tkn['x']=pad(tkn['x'],3);
             // if match in tkn, replace; if match w/o leading 0 in tkn; replace with padded value; otherwise assume quoted text
-console.log(tkn,frmt);
             return (frmt).replace(RE,$0=>$0 in tkn ? tkn[$0] : $0.slice(1) in tkn ? pad(tkn[$0.slice(1)]) : $0.slice(1,-1));
     };
 };
