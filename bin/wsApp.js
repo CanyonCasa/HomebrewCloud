@@ -80,6 +80,7 @@ function wsApp(config) {
             this.scribble.extra('msg:', print(msg,80));
             if (verifyThat(msg,'isTrueObject') && verifyThat(msg.topic,'isDefined') && verifyThat(msg.payload,'isAnyObject')) {
                 let client = this.clients.get(ws);
+                if (!client) return this.scribble.warn(`Publishing to unknown client [${ws}]`);
                 if (msg.topic==='-') {
                     // authentication, configuration of publishing/subscribing topics, and announcements...
                     let user = jwt.verify(msg.jwt||msg.payload.jwt) || {member:''};
