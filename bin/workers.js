@@ -269,7 +269,7 @@ workers.listFolder = listFolder;
 /// eMail Service
 let cfgMail = null;
 /**
- * @function mail sends a mail message via Sendgrid, throws an error if Sendgrid module not configured
+ * @function mail sends a mail message via nodemailer, throws an error if nodemailer module not configured
  * @param {object} msg - email message object containing addresses and body
  * @param {string} msg.to - optional address list (string or array), at least one must be defined
  * @param {string} msg.cc - optional address list
@@ -297,9 +297,9 @@ workers.mail = async function mail(msg) {
     let note = { msg: `MAIL[${emsg.subject}] sent to: ${toWhom}` };
     try {
         let info = await cfgMail.transporter.sendMail(emsg);
-        return { response: msg.verbose ? info:info.response, msg: emsg, summary: note };
+        return { response: msg.verbose ? info:info.response, msg: emsg, summary: {msg: note, error: ''} };
     } catch(e) {
-        return { error: e, msg: emsg, summary: note };
+        return { error: e, msg: emsg, summary: {msg: note.msg, error: e.toString()||'REASON UNKNOWN'} };
     };
 };
 
@@ -444,7 +444,7 @@ const prefix = (n)=>n && String(n).replace(/^\+{0,1}1{0,1}/,'+1'); // phone numb
  * @param {string} msg.body - required message text, alternate msg.text
  * @return {{}} - object containing a summary report and queue of action
  */
-const smsPrefix = (n)=>n && String(n).replace(/^\+{0,1}1{0,1}/,'+1'); // prefix phomne numbers with +1
+const smsPrefix = (n)=>n && String(n).replace(/^\+{0,1}1{0,1}/,'+1'); // prefix phone numbers with +1
 const smsRequest = (payload) =>({
     protocol: 'https:',
     hostname: 'api.twilio.com',
@@ -481,8 +481,8 @@ workers.sms = async function sms(msg) {
         let txt = {To: n, From: cfgTwilio.number, Body: msg.body||msg.text, statusCallback:cb};
         return new Promise(resolve => {
             smsSend(txt)
-                .then(mr=>{ resolve({ report: mr, msg: txt, summary: { id:mr.sid, msg:`Text message queued to: ${n} as ${mr.sid}` }}); })
-                .catch(e=>{ resolve({ report: null, msg: txt, error: e, summary: { msg:`Text message to: ${n} failed` }}); });
+                .then(mr=>{ resolve({ report: mr, msg: txt, error: null, summary: { id:mr.sid, msg:`Text message queued to: ${n} as ${mr.sid}`, error:'' }}); })
+                .catch(e=>{ resolve({ report: null, msg: txt, error: e, summary: { msg:`Text message to: ${n} failed`, error: e.toString()||'REASON UNKNOWN' }}); });
         });
     }));
     return queue;
@@ -584,9 +584,10 @@ workers.logins.log = function log(usr, tag, err) {
     };
 };
 workers.internals = ()=>{
+    if (!workers.statistics.get('$','start')) workers.statistics.set('$','start',new Date().toISOString() );
+    workers.statistics.set('$','uptime',asTimeStr(new Date() - new Date(workers.statistics.get('$','start'))));
     let internals = { statistics: workers.statistics.get(), analytics: workers.analytics.get(),
         logins: workers.logins.get(), blacklists: workers.blacklists.get() };
-    internals.statistics.$.uptime = asTimeStr(new Date() - new Date(internals.statistics.$.start));
     return internals;
 }
 
