@@ -176,9 +176,9 @@ workers.httpStatusMsg = error => {
  * @param {string} secret - encryption secret key, defaults to configured value of 256-bit unique value at startup
  * @returns {object} JWT payload if valid, null if invalid
  */
-let cfgJWT = {expiration: 60*24, secret: uniqueID(64,16), renewal: false}   // sets defaults; override on initial workers call w/cfg
+// set defaults; override on initial workers call w/cfg
+let cfgJWT = {expiration: 60*24, secret: uniqueID(64,16), apiKey: uniqueID(64,16), renewal: false};
 workers.jwt = {
-    //cfg: {expiration: 60*24, secret: uniqueID(64,16), renewal: false},  // sets defaults
     create: (data,secret,expiration) => {
         // payload always includes 'initiated at' (iat) and expiration in minutes (exp), plus data
         let exp = expiration===null ? 0 : expiration*60 || data.exp || cfgJWT.expiration*60;   // expiration in seconds
@@ -297,7 +297,7 @@ workers.mail = async function mail(msg) {
     let note = { msg: `MAIL[${emsg.subject}] sent to: ${toWhom}` };
     try {
         let info = await cfgMail.transporter.sendMail(emsg);
-        return { response: msg.verbose ? info:info.response, msg: emsg, summary: {msg: note, error: ''} };
+        return { response: msg.verbose ? info:info.response, msg: emsg, summary: {msg: note.msg, error: ''} };
     } catch(e) {
         return { error: e, msg: emsg, summary: {msg: note.msg, error: e.toString()||'REASON UNKNOWN'} };
     };
@@ -599,12 +599,7 @@ module.exports = function configure(cfg={}) {
         mimeTypesExtend(cfg.mimeTypes); // must be called with or w/o configuration
         if (cfg.mail) { // set configuration and create transport
             cfgMail = cfg.mail;
-            cfgMail.transporter = nodemailer.createTransport({
-                host: cfg.mail.host,
-                port: cfg.mail.port || 587,
-                secure: cfg.mail.secure || false,
-                auth: cfg.mail.auth
-            })
+            cfgMail.transporter = nodemailer.createTransport(cfgMail.smtp);
         };
         if (cfg.twilio || cfg.text) cfgTwilio = cfg.twilio || cfg.text;
     }

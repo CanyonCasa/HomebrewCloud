@@ -34,8 +34,10 @@ function App(context) {
     this.db = context.shared.db.mapByKey(connection=>connection);   // reference any shared db conections, can't be merged
     (context.cfg.databases||{}).mapByKey((def,tag)=>{ def.tag = def.tag || tag; this.db[tag] = new jxDB(def); }); // add new db's
     // authentication setup required by auth & account middleware
-    this.authenticating = !(context.cfg.options===null || context.cfg.options?.auth === null);
-    if (this.authenticating && !this.db.users) this.scribe.fatal('Users database not found, required for authentication');
+    this.authOptions = context.cfg.options===null ? null : context.cfg.options.auth===null ? null : context.cfg.options.auth;
+    this.authenticating = !!this.authOptions;
+    this.authServer = this.authOptions ? (typeof(this.authOptions)==='object' ? this.authOptions.url : this.authOptions) : null;
+    if (this.authenticating && !this.authServer && !this.db.users) this.scribe.fatal('Users database not found, required for authentication');
     if (this.db.users) addUserCandy(this.db.users);
     this.build();       // build route table...
     this.start();       // start the server...
@@ -56,10 +58,12 @@ App.prototype.build = function() {
     if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));   // all routes
     if (cors!==null) addRoute('any','',appNativeware.cors(cors));                     // all routes
     if (this.authenticating) {
-        customizeRoute(account, appNativeware.routes.account);
-        addRoute('any',account.route,appNativeware.account(account));  // hardwired route
+        if (!this.authServer) {
+            customizeRoute(account, appNativeware.routes.account);
+            addRoute('any',account.route,appNativeware.account(account));  // hardwired default route
+        };
         customizeRoute(login, appNativeware.routes.login);
-        addRoute('any',login.route,appNativeware.login(login));          // hardwired route
+        addRoute('any',login.route,appNativeware.login(login));        // hardwired default route
     };
     // custom handlers and routes specified by configuration...
     handlers.forEach(h=>{

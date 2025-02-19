@@ -2,7 +2,7 @@
  * @module Extensions2JS
  * 
  * Personal JavaScript language extensions...
- * (c) 2020 Enchanted Engineering, MIT license
+ * (c) 2025 Enchanted Engineering, MIT license
  * All code in this module directly modifies JavaScript primitives, as such, the module has no exports
  * This module only needs loaded once per application
  * 
@@ -52,6 +52,7 @@
  *    'http':   HTTP Date header format, per RFC7231
  *    'iso':    "YYYY-MM-DD'T'hh:mm:ssZ", JavaScript standard, not mutable
  *    'nice':   "XD XM" D YYYY h:mma", concise human readable format, i.e Sun Apr 7 2024 8:37AM 
+ *    'scribe': "MM-DDThh:mm:ss", concise format for transcripts
  *    'stamp:   filespec safe timestamp string, '20161207T212211Z'
  *    'NEW'     "NEW:key:value" will define a new format keyword or change an existing format, note iso is not mutable
  *  notes:
@@ -88,14 +89,14 @@ if (!Date.prototype.style) Date.prototype.style = function(frmt,realm) {
     const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
     const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     const RE = /Y(?:YYY|Y)?|[SX][MDZ]|0?([MDNhms])\1?|[aefxz]|([\'\"])(.*?)\2/g;  // Date.prototpye.style parsing pattern
-    if (!Date.prototype.styleFormats) Date.prototype.styleFormats = {
+    let styles = {
         iso: 'FYI: UNMUTABLE ISO8601, w/iso-like for local zone',
         form: 'YYYY-MM-DD hh:mm',
         http: 'XD, DD XM YYYY hh:mm:ss "GMT"',
         nice: 'XD XM D YYYY h:mma',
+        scribe: 'MM-DDThh:mm:ss',
         stamp: 'YMMDDThhmmss'
     };
-    let styles = Date.prototype.styleFormats;
     let r =  String(realm||'').toLowerCase();   // validate params
     let f = (frmt && frmt.startsWith('NEW')) ? 'NEW' : String(frmt||'').toLowerCase();
     // adjustment sign: local=1; utc=-1; no change=0
@@ -119,7 +120,7 @@ if (!Date.prototype.style) Date.prototype.style = function(frmt,realm) {
         case 'NEW':
             let fields = frmt.split(':').slice(1);
             let [ key, value ] = [fields[0], fields.slice(1).join(':')];
-            if (key!=='iso') Date.prototype.styleFormats[key] = value;
+            if (key!=='iso') styles[key] = value;
             return dx.style(key,realm);
         default:  // other defined or arbitrary formats
             if (f in styles) return dx.style(styles[f]);    // other defined styles

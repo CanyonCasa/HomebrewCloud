@@ -10,9 +10,6 @@
 ///*************************************************************
 /// Dependencies...
 ///*************************************************************
-const fs = require('fs');
-const path = require('path');
-const fsp = fs.promises;
 const { asList, asStr, resolveSafePath, verifyThat, print } = require('./helpers');
 const { analytics, auth, jwt, listFolder, mail, safeAccess, safeStat, sms } = require('./workers');  
 const { Cache, FileEntry } = require('./caching');
@@ -289,14 +286,15 @@ nativeware.logAnalytics = function logAnalytics(options={}) {
  * 
  */
 nativeware.login = function login(options={}) {
+    let self = this;
     let scribble = this.scribe;
     scribble.info(`Login nativeware initialized ...`);
     return async function loginMW(ctx) {
-        scribble.trace(`Login: ${ctx.args.action}`);
+        scribble.trace(`Login${'@'+(self.authServer?self.authServer:'')}: ${ctx.args.action} as ${ctx.user?.username}`);
         if (ctx.args.action=='logout') return {};
         if (!ctx.authenticated) throw 401;
         if (ctx.authenticated=='bearer' && !ctx.user.ext) throw { code: 401, msg: 'Token renewal requires login' };
-        ctx.jwt = ctx.user.other.account==='api' ? jwt.create(ctx.user,null,null) : jwt.create(ctx.user);
+        ctx.jwt = ctx.jwt || (ctx.user.other.account==='api' ? jwt.create(ctx.user,null,null) : jwt.create(ctx.user));
         ctx.headers({authorization: `Bearer ${ctx.jwt}`});
         return { token: ctx.jwt, payload: jwt.extract(ctx.jwt).payload };   // response: JWT (as token), and user data (payload)
     };

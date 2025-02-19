@@ -108,7 +108,7 @@ function jxDB(def={},data) {
     let schema = {
         format: def.format || dbx['_'].format || 'tabular',     // storage: pretty, tabular, packed
         delay: def.delay!==undefined ? def.delay : 
-          dbx['_'].delay!==undefined ? dbx['_'].delay : 2000,   // changed write delay, default 1000ms
+          dbx['_'].delay!==undefined ? dbx['_'].delay : 2000,   // changed write delay, default 2000ms
         readOnly: def.readOnly || dbx['_'].readOnly || false,   // flag to inhibit changes
         file: this.file,                                        // for reference only
         tag: def.tag || dbx['_'].tag || this.file.replace(/^.*[\\/]|\..*$/g, '') || 'DB',  // for reference only
@@ -119,15 +119,16 @@ function jxDB(def={},data) {
 
     this.scribble = Scribe(schema.tag||'db');                   // transcripting reference
 
-    // file watch and reloading; blocks during saving; implements the save timeout...
+    // file watch and reloading; prohibits/ignores changes during saving with wait timeout...
     this.watcher = (function(){
         let watch = { self: this, fileWatch: null, reloading: false, saving: false, tag: schema.tag, timex: null, wait: dbx['_'].delay };
         if ((def.watch!==false) && (this.file!=='_memory_') && exists) {
             watch.fileWatch = fs.watch(watch.self.file,evt=>{
-                if (evt=='change') {
+                if (evt=='change') {    // external transfer or file save change
                     if (watch.saving || watch.reloading) return;
                     watch.reloading = true;
-                    watch.self.reload().then(x=>{ watch.reloading=false; }).catch(e=>{});
+                    // wait a moment for external transfer/save to finish ...
+                    setTimeout(()=>{ watch.self.reload().then(x=>{ watch.reloading=false; }).catch(e=>{}); }, watch.wait);
                 };
             });
             this.scribble.note(`Watching database '${def.tag||this.file}' for changes`);
@@ -229,12 +230,15 @@ jxDB.prototype.query = function query(recipeSpec, bindings=null, user={}) {
         throw {code: 500, detail: "jxDB.query ERROR: bad recipe precheck -- no expression!:"};      
     };
     // prep params... defaults (recipe.bindings) and/or query bindings may or may not be defined
+    this.scribble.extra("jxDB.query precheck OK"); 
     let params = recipe.bindings!==undefined ? Object.assign({},recipe.bindings) : null;
     if (bindings) params = params ? params.mergekeys(bindings) : bindings;
-    if (params) params = jxSafe(params,recipe.scrub||'*');
-    params = params ? params.mergekeys({_: user}) : {_: user};
-    this.scribble.trace(`jxDB.query[${recipe.name}] params: ${print(params,60)}`);
-    try {
+    this.scribble.trace("jxDB.query params",params);
+    try {    
+        if (params) params = jxSafe(params,recipe.scrub||'*');
+        this.scribble.extra("jxDB.query safe params",params);
+        params = params ? params.mergekeys({_: user}) : {_: user};
+        this.scribble.trace(`jxDB.query[${recipe.name}] params: ${print(params,60)}`);
         let tmp = jsonata(recipe.expression).evaluate(this.db(),params);
         if (verifyThat(tmp,'isNotDefined')) return recipe.dflt||null;
         // workaround -> jsonata returns by reference so need to deepcopy to prevent corrupting database!

@@ -378,7 +378,6 @@ serverware.router = async function(ctx) {
 serverware.defineRequestPreprocessor = function(cfg={}) {
     let self = this;
     let scribble = this.scribe;
-    let authenticating = this.authenticating;
     let opts = { temp: '../tmp', limits: {request: '64K', upload: '10M'},
       log: "RQST[${ctx.request.method}]: ${ctx.request.href}" }.mergekeys(cfg.options);
     let prompt = (msg,vars) => new Function("let ctx=this; return `"+msg+"`;").call(vars);  // ctx->vars->this->ctx
@@ -387,12 +386,14 @@ serverware.defineRequestPreprocessor = function(cfg={}) {
     if (!fs.existsSync(bodyParseOptions.temp)) fs.mkdirSync(bodyParseOptions.temp);
 
     return async function requestProcessor(req,ctx) {
-        scribble.extra('requestProcessor entered...');
+        scribble.extra('requestPreProcessor entered...');
         let props = parseRequestProperties(req);    // parse request properties
         ctx.mergekeys(props);
-        scribble.extra(`authenticating: ${authenticating}, authorization: ${ctx.request.HEADERS['authorization']}`);
-        if (authenticating && 'authorization' in ctx.request.HEADERS) await authenticate.call(self,ctx);
-        scribble.extra(`authorize: ${ctx.authorize()}`);
+        if (self.authenticating && 'authorization' in ctx.request.HEADERS) {
+            scribble.extra(`authenticating: ${self.authenticating}, authorization: ${ctx.request.HEADERS['authorization']}`);
+            await authenticate.call(self,ctx);
+            scribble.extra(`authorize: ${ctx.authorize()}`);
+        };
         scribble.log(prompt(opts.log,ctx));         // log request
         if (ctx.verbIs('post,put,patch')) {
             if (ctx.authorize() || ctx.request.pathname.startsWith('/user/')) {   // any authenticated user or new user

@@ -1,6 +1,7 @@
 /*
   Module to consolidate authentication routines for reuse...
 */
+const https = require('https');
 const { asList, base64, hash, print, verifyThat } = require('./helpers');
 const { auth, jwt, logins } = require('./workers');
 
@@ -31,11 +32,30 @@ let authorize = (allowed,memberOf) => { // user authenticated if this gets calle
     return membership.some(m=>granted.includes(m)) || membership.includes('admin');
 };
 
+/**
+ * @function refer makes request to external authentication server
+ * @param {object} ctx - context of the request
+ * @return {object} external server's response 
+ */
+function refer(ctx) {
+    return new Promise((resolve,reject)=>{
+        let headers = { authorization:  ctx.request.HEADERS.authorization, accept: '*/*' };
+        const req = https.request(this.authServer,{headers: headers},reply=>{
+            ctx.headers(reply.headers);
+            let data = '';
+            reply.on('data', (chunk) => { data += chunk; });
+            reply.on('end', () => { resolve(JSON.parse(data)); });
+            reply.on('error', reject);
+            });
+        req.on('error', reject);
+        req.end();
+        });
+};
 
 /**
-* @function auth performs user authentication based on the authorization header
-* @param {object} [options]
-* @return {object} middleware
+* @function authenticate performs user authentication based on the authorization header
+* @param {object} ctx context for the pending request
+* @return {object} modified context
 */
 async function authenticate(ctx) {
     let self = this;
@@ -58,29 +78,39 @@ async function authenticate(ctx) {
         ctx.user = header.fields.payload;  // valid JWT so authentication valid
         logins.log(ctx.user.username,'validated bearer login');
     } else if (header.method==='basic') { // Basic authentication requested (i.e. login)
-        if (!header.username && !header.password) return failed(header.username,'failed invalid', { code: 401, msg: 'Invalid authentication credentials' });
-        let user = usersDB.getUser(header.username);
-        if (verifyThat(user,'isEmpty')) return failed(header.username,'failed user', { code: 401, msg: 'Invalid user credentials' });
-        if (user.status!=='ACTIVE') return failed (user.username,'failed inactive', { code: 401, msg: 'Inactive user' });
-        let valid = await validate(header,user);
-        ////////////////////////////////////////////////////////////////
-        // TEMPORARY PATCH FOR BACK COMPATIBILITY WITH PRIOR HOMEBREW CODE
-        if (!valid) {   // may be old format of pre-hashed password...
-            let oldChallenge = hash(header.username+header.password);
-            valid = await auth.checkPW(oldChallenge,user.credentials.hash);
-            if (valid) {    // update credentials
-                user.credentials.oldHash = user.credentials.hash;
-                user.credentials.hash = await auth.genHashPW(header.password);
-                scribble.trace(`authenticate: updating ${user.username} credentials `);
-                usersDB.chgUser(user.username,{credentials: user.credentials});
-            } else {
-                return failed(user.username,'failed login', { code: 401, msg: 'Authentication failed!' });
+        if (self.authServer) {
+            scribble.note(`Referring authentication to ${self.authServer}`);
+            try {
+                let auth = await refer.call(self,ctx);    // should be { token: <jwt>, payload: <jwt.payload> }
+                ctx.user = auth.payload;
+                ctx.jwt = auth.token;
+                logins.log(ctx.user.username,'validated by external login');
+            } catch(e) { return failed(header.username,'referal failed', { code: 500, msg: e.toString() }) };
+        } else {
+            if (!header.username && !header.password) return failed(header.username,'failed invalid', { code: 401, msg: 'Invalid authentication credentials' });
+            let user = usersDB.getUser(header.username);
+            if (verifyThat(user,'isEmpty')) return failed(header.username,'failed user', { code: 401, msg: 'Invalid user credentials' });
+            if (user.status!=='ACTIVE') return failed (user.username,'failed inactive', { code: 401, msg: 'Inactive user' });
+            let valid = await validate(header,user);
+            ////////////////////////////////////////////////////////////////
+            // TEMPORARY PATCH FOR BACK COMPATIBILITY WITH PRIOR HOMEBREW CODE
+            if (!valid) {   // may be old format of pre-hashed password...
+                let oldChallenge = hash(header.username+header.password);
+                valid = await auth.checkPW(oldChallenge,user.credentials.hash);
+                if (valid) {    // update credentials
+                    user.credentials.oldHash = user.credentials.hash;
+                    user.credentials.hash = await auth.genHashPW(header.password);
+                    scribble.trace(`authenticate: updating ${user.username} credentials `);
+                    usersDB.chgUser(user.username,{credentials: user.credentials});
+                } else {
+                    return failed(user.username,'failed login', { code: 401, msg: 'Authentication failed!' });
+                };
+            ////////////////////////////////////////////////////////////////
             };
-        ////////////////////////////////////////////////////////////////
-        };
-        delete user.credentials;
-        ctx.user = user;
-        logins.log(user.username,'validated basic login');
+            delete user.credentials;
+            ctx.user = user;
+            logins.log(user.username,'validated basic login');
+        }
     } else {
         return failed('???','unknown/unsupported auth method', { code: 401, msg: 'Authentication failed!' });
     };

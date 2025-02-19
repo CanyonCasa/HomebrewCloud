@@ -73,7 +73,7 @@ scribe.debug(`HomebrewCloud site '${tag}' setup...`);
 
 scfg.headers = {"x-powered-by": "HomebrewCloud "+VERSION}.mergekeys(scfg.headers);
 app.mergekeys({cfg: scfg, routes: [], tag: tag, db: {}});
-scfg.databases.mapByKey((def,tag)=>{
+(scfg.databases||{}).mapByKey((def,tag)=>{
     def.tag = def.tag || tag;       // ensure a defined tag
     scribe.trace(`Connecting db[${tag}] ...`);
     app.db[tag] = new jxDB(def);    // establish database
@@ -81,8 +81,10 @@ scfg.databases.mapByKey((def,tag)=>{
 app.scribe = Scribe(tag);
 
 // authentication setup required by auth & account middleware
-app.authenticating = !(scfg.options===null || scfg.options?.auth === null);
-if (app.authenticating && !app.db.users) scribe.fatal('Users database not found, required for authentication');
+app.authOptions = scfg.options===null ? null : scfg.options.auth===null ? null : scfg.options.auth;
+app.authenticating = !!app.authOptions;
+app.authServer = app.authOptions ? (typeof(app.authOptions)==='object' ? app.authOptions.url : app.authOptions) : null;
+if (app.authenticating && !app.authServer && !app.db.users) app.scribe.fatal('Users database not found, required for authentication');
 // add syntax candy to database prototype...
 if (app.db.users) addUserCandy(app.db.users);
 
@@ -95,11 +97,14 @@ function addRoute (method,route,afunc) { serverware.addRoute(app.routes,method||
 // create and build middleware stack starting with priority built-in configurable features...
 if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));
 if (cors!==null) addRoute('any','',appNativeware.cors(cors));
+    // authentication setup required by auth & account middleware
 if (app.authenticating) {
-    customizeRoute(account, appNativeware.routes.account);
-    addRoute('any',account.route,appNativeware.account(account));
+    if (!app.authServer) {
+        customizeRoute(account, appNativeware.routes.account);
+        addRoute('any',account.route,appNativeware.account(account));  // hardwired default route
+    };
     customizeRoute(login, appNativeware.routes.login);
-    addRoute('any',login.route,appNativeware.login(login));
+    addRoute('any',login.route,appNativeware.login(login));        // hardwired default route
 };
 // custom handlers specified by configuration...
 handlers.forEach(h=>{

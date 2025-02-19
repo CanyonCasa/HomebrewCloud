@@ -25,7 +25,7 @@ const jsonata = require('jsonata');
 // serverware middleware container    
 var apiware = {
 	routes: {	// default routes
-		api: '/:prefix([$@!~]):recipe/:opts*'
+		api: '/:recipe([$@!~][a-z0-9_-]*)/:opts*'   // updated to incorporate prefix into recipe name as required by vulnerability with path-to-regexp
 	}
 };
 
@@ -53,7 +53,7 @@ function info(ctx) {
     let v4 = raw.replace(/:.*:([\d.]+)/,($0,$1)=>$1.includes('.')?$1:'127.0.0.'+$1);
     let v6 = (v4!=raw) ? raw : "0:0:0:0:0:0:0:0";
     let dx = new Date().style();
-    switch (ctx.request.params.recipe) {
+    switch (ctx.request.params.recipe.slice(1)) {
         case 'iot': return { ip: v4, time: dx.e, iso: dx.iso };
         case 'cfg': return ok ? this : {};
         case 'ctx': return ok ? ctx : {};
@@ -247,8 +247,8 @@ async function patch(db,ctx) {
 // get ~recipe handler to return file stats...
 async function stats(db,ctx) {
     let scribble = this.scribe;
-    scribble.trace(`stat: ${ctx.args.prefix+ctx.args.recipe} ${print(ctx.args)}`);
-    let recipe = db.lookup(ctx.args.prefix+ctx.args.recipe||'');    // get recipe
+    scribble.trace(`stat: ${ctx.args.recipe} ${print(ctx.args)}`);
+    let recipe = db.lookup(ctx.args.recipe||'');    // get recipe
     if (verifyThat(recipe,'isEmpty')) return await ctx.next();
     if (!recipe.root) throw {code: 500, detail: "upload ERROR: bad recipe precheck -- no root!:"};
     let auth = recipe.auth instanceof Array ? recipe.auth[1] : recipe.auth;
@@ -268,8 +268,8 @@ async function stats(db,ctx) {
 // post ~recipe handler for file uploads...
 async function upload(db,ctx) {
     let scribble = this.scribe;
-    scribble.trace(`upload: ${ctx.args.prefix+ctx.args.recipe} ${print(ctx.args)}`);
-    let recipe = db.lookup(ctx.args.prefix+ctx.args.recipe||'');    // get recipe
+    scribble.trace(`upload: ${ctx.args.recipe} ${print(ctx.args)}`);
+    let recipe = db.lookup(ctx.args.recipe||'');    // get recipe
     if (verifyThat(recipe,'isEmpty')) return await ctx.next();
     if (!recipe.root) throw {code: 500, detail: "upload ERROR: bad recipe precheck -- no root!:"};
     let auth = recipe.auth instanceof Array ? recipe.auth[1] : recipe.auth;
@@ -323,7 +323,8 @@ apiware.api = function api(options={}) {
     scribble.info(`Homebrew API middleware initialized with route '${options.route}'...`);
     return async function apiCW(ctx) {
         scribble.trace(`api route[${ctx.routing.route.method}]: ${ctx.routing.route.route}`);
-        switch (ctx.request.params.prefix) {
+        let prefix = ctx.request.params.recipe ? ctx.request.params.recipe[0] : '';
+        switch (prefix) {
             case '$':
                 if (ctx.verbIs('get')) return await ask.call(site,db,ctx)
                 if (ctx.verbIs('post,put')) return await tell.call(site,db,ctx);
@@ -332,7 +333,7 @@ apiware.api = function api(options={}) {
             case '@':   // built-in actions (defined as 'recipe' paramter field)
                 scribble.trace(`${ctx.request.method}: ${ctx.request.params.recipe} =>${ctx.request.body}`);
                 if (ctx.request.method!=='post') throw 405;
-                switch (ctx.request.params.recipe) {
+                switch (ctx.request.params.recipe.slice(1)) {
                     case "scribe": return scribeMask.call(site,ctx);
                     case "mail":
                         if (!ctx.authorize('contact')) throw 401;
