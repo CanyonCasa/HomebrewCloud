@@ -140,7 +140,7 @@ let Proxy = async function(config) {
         if (config.sockets) {
             let socketRoutes = {}; // key: route, value: app
             config.sockets.mapByKey((cfg,key)=>{
-                let scfg = {tag: key, route: '/'+key}.mergekeys(cfg);
+                let scfg = {tag: key, route: '/'+key, topics: []}.mergekeys(cfg);
                 let sApp = null;
                 try { 
                     sApp = new (cfg.app ? require(cfg.app) : WebSocketApp)(scfg);

@@ -478,8 +478,8 @@ serverware.defineErrorHandler = function(cfg={}) {
     return async function errorHandler(err,ctx,res) {
         try {
             let ex = httpStatusMsg(err);            // standard HomebrewDIY error format
-            if (ex.code==405) scribble.trace(`errorHandler: ${print(ex)}`); // method not supported
-            if (ex.code==404 && redirect) {         // if not found provide the option of redirecting
+            if (ex.code===405) scribble.trace(`errorHandler: ${print(ex)}`); // method not supported
+            if (ex.code===404 && redirect) {        // if not found provide the option of redirecting
                 let destination = ctx.request.href.replace(...redirect);
                 scribble.trace(`Redirect[${ctx.request.method}] ${ctx.request.href} -> ${destination}`);
                 res.writeHead(301,{Location: destination});
@@ -487,13 +487,14 @@ serverware.defineErrorHandler = function(cfg={}) {
                 res.writeHead(ex.code,ex.msg);
                 scribble.trace(`Status[${ctx.request.method}] ${ctx.request.href} -> ${ex.code}:${ex.msg}`);
             } else {                                // response with error message, if possible
+                if (ex.code===404) ex.detail = `(${ctx.request.href})`;
                 let eText = JSON.stringify(ex);
                 if (!res.headersSent) {
                     res.setHeader('Content-Type', 'application/json');
                     res.setHeader('Content-Length', eText.length);
                     res.write(eText);
-                    scribble.error(`HTTP Error[${ex.code}]: ${ex.msg}${ex.detail?', '+print(ex.detail,40):''}`);
-                    if (ex.code==500 && ctx.debug) scribble.dump(err);
+                    scribble.error(`HTTP Error[${ex.code}]: ${ex.msg} ${ex.detail?', ' + print(ex.detail,60):''}`);
+                    if (ex.code===500 && ctx.debug) scribble.dump(err);
                 } else {
                     scribble.error(`${ex.detail}`);
                 };

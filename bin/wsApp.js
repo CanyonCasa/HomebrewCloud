@@ -40,9 +40,11 @@ let uuid4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,
   
 function wsApp(config) {
     this.appName = 'wsApp';
-    this.tag = config.tag;
     this.cfg = config;
-    this.authTopics = this.cfg.topics.filter(t=>t.auth).reduce((x,tpc)=>{x[tpc.name]=tpc; return x},{});
+    this.tag = config.tag;
+    this.definedTopics = config.topics.map(c=>({name: c.name, auth: c.auth||{}})).reduce((x,t)=>{
+        x[t.name]={name: t.name, auth:['pub','sub','usr']
+            .reduce((y,k)=>{y[k]=t.auth[k] ? asList(t.auth[k]):null; return y;},{})}; return x;},{}); // complete definition
     this.scribble = Scribe(config.tag);
     this.wss = new WebSocket.WebSocketServer({ noServer: true });   // no http server since routed via proxy
     this.clients = new Map();   // set of connected clients
@@ -52,10 +54,11 @@ function wsApp(config) {
         const parameters = parseURL(req.url).query;
         const hb = req.hb;  // recover proxy/site context
         const ref = parameters.id || parameters.name || uuid;
-        const topics = asList((parameters.topics||parameters.topic));
         const metadata = { uuid, ref, hb, ...parameters };
-        this.clients.set(ws,{ws:ws, ref: ref, metadata:metadata, topics: topics, auth: []});
-        this.scribble.trace(`Websocket connection ${ref} established...`)
+        let topics = asList((parameters.topics||parameters.topic));
+        this.clients.set(ws,{ws:ws, ref: ref, metadata:metadata, topics: topics, user: {member: []} });
+        this.scribble.log(`Websocket connection ${ref} established...`);
+        ws.send(JSON.stringify({topic: '-', ref: ref}));
 
         ws.on('error',(e)=>{
             let def = this.clients.get(ws);
@@ -64,41 +67,54 @@ function wsApp(config) {
         });
 
         ws.on('message', async (msg$) => {  // coming from client to server
-            let msgError = (e) => {
+            let send = (clientx,msg) => { clientx.ws.send(JSON.stringify(msg)); };
+            let err = (eclient,msg,e) => {
                 this.scribble.warn(e);
-                ws.send(JSON.stringify({error: "invalid message", detail: e.toString()}));
+                msg.error = {message: "invalid message", detail: e.toString()}
+                send(eclient,msg);
             };
-            let msg = {};
-            try { msg = JSON.parse(msg$); } catch (e) { msgError(e) };
-            if (!(verifyThat(msg,'isTrueObject') && verifyThat(msg.topic,'isDefined') && ('payload' in msg)))
-                msgError(`ERROR: '{"topic":"...", "payload": ...}' minimum message expected!`);
-            // valid message ...
-            this.scribble.extra('msg:', print(msg,80));
             let client = this.clients.get(ws);
+            let msg = {};
+            try { msg = JSON.parse(msg$); } catch (e) { err(client,msg,e) };
+            if (!(verifyThat(msg,'isTrueObject') && verifyThat(msg.topic,'isDefined') && ('payload' in msg)))
+                err(client,msg,`ERROR: '{"topic":"...", "payload": ...}' minimum message expected!`);
+            // valid message ...
+            this.scribble.extra(`msg[${client.ref}]:`, print(msg,80));
+            let auth = msg.auth||msg.jwt||msg.payload?.auth||msg.payload?.jwt||null;
+            let user = auth ? (jwt.verify(auth) || {member: []}) : client.user;
             if (msg.topic==='-') {
-                // authentication, configuration of publishing/subscribing topics, and announcements...
-                let auth = msg.auth||msg.jwt||msg.payload.auth||msg.payload.jwt||null;
-                if (auth) {
-                    let user = jwt.verify(auth) || {member:''};
-
-                  client.topics = distinct([...asList(msg.payload?.topics),...client.topics]);
-                    this.cfg.topics.filter(t=>t.auth && client.topics.includes(t.name) && user.member.includes(t.auth)).
-                        forEach(tpc=>client.auth.push(tpc.name));
-                    msg.auth = client.auth.length ? client.auth : null;
-                    client.ws.send(JSON.stringify(msg));
+                // authentication, (TBD configuration of publishing/subscribing topics, and announcements)...
+                if (user.username) {
+                    client.user = { username: user.username, member: user.member };
+                    client.topics = distinct([...asList(msg.payload?.topics),...client.topics]);
+                    msg.auth = { ref: client.ref, user: client.user, topics: client.topics, clients: [...this.clients.values()].map(c=>c.ref) };
+                    send(client,msg);
+                    this.scribble.log(`User ${user.username} authorized; topics list: ${client.topics}`);
+                } else {
+                    msg.auth = null;
+                    err(client,msg,'Unauthorized user');
                 };
             } else {
-                let authTopic = this.authTopics[msg.topic];
-                let authorizedToPublish = !authTopic || !authTopic.authRequired || (authTopic.authRequired && client.auth.includes(authTopic.name));
+                //let authTopic = this.authTopics[msg.topic];
+                let pcheck = msg.topic in this.definedTopics ? this.definedTopics[msg.topic].auth.pub : null;
+                let authorizedToPublish = !pcheck || client.user.member.some(m=>pcheck.includes(m));
                 if (!authorizedToPublish) {
-                    msg.error = `Not Authorized to publish to topic ${msg.topic}`
-                    client.ws.send(JSON.stringify(msg));    // reply back to client only!
+                    err(client,msg,`NOT Authorized to publish to topic ${msg.topic}`); // reply back to client only!
+                    this.scribble.trace(`User ${user.username||'???'} attempted unauthorized publishing to topic ${msg.topic}`);
                 } else {
                     this.clients.forEach(c=>{
-                        if (c.metadata.uuid===client.metadata.uuid) return;   // don't reply to self!
-                        let authorizedToSubscribe = !authTopic || ((authTopic.authRequired || msg.auth) && c.auth.includes(authTopic.name));
-                        let inDistribution = !msg.clients || msg.clients.includes(c.ref);
-                        if (authorizedToSubscribe && inDistribution) c.ws.send(JSON.stringify(msg));
+                        if (c.metadata.uuid===client.metadata.uuid || c.user.username===client.user.username) return;   // don't reply to self!
+                        let scheck = msg.topic in this.definedTopics ? this.definedTopics[msg.topic].auth.sub : null;
+                        let authorizedToSubscribe = !scheck || client.user.member.some(m=>scheck.includes(m));
+                        let inDistribution = (msg.client===c.ref) || !msg.clients || msg.clients.includes(c.ref);
+                        if (authorizedToSubscribe && inDistribution) {
+                            let ucheck = msg.topic in this.definedTopics ? this.definedTopics[msg.topic].auth.usr : null;
+                            if (ucheck && ucheck.includes(c.ref)) { 
+                                msg.usr = client.user;
+                                msg.client = client.ref;    // only return usr (client) authorized messages back to original client.
+                            };
+                            send(c,msg);
+                        };
                     });
                 }
             };
