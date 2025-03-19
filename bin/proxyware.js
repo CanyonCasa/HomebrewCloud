@@ -50,17 +50,21 @@ let proxyRouter = (tag) => {
         let route = self.routes[host] || self.routes['*.' + host.substr(host.indexOf('.')+1)];
         let ip = req.headers['x-forwarded-for']||req.connection.remoteAddress||'?';
         if (route) {
-          statistics.inc(self.tag,'served');
-          self.scribble.debug(`Proxy ${ip} -> ${host} -> ${method} ${url} (${route.host}:${route.port})`);
-          self.proxy.web(req, res, {target: route});
+            statistics.inc(self.tag,'served');
+            self.scribble.debug(`Proxy ${ip} -> ${host} -> ${method} ${url} (${route.host}:${route.port})`);
+            try {
+                self.proxy.web(req, res, {target: route});
+            } catch(e) {
+                res.end(); // trap malformed (hacking) requests 
+            };
         } else {
-          let localIP = ip.match(/(?:192\.168|127\.\d+|10\.\d+|169\.254)\.\d+\.\d+$/);
-          if (!localIP || self.cfg.verbose) { // ignore diagnostics for local addresses unless verbose
-            let probes = statistics.inc(self.tag,'probes');
-            let perIP = blacklists.inc(self.tag,ip);
-            self.scribble.dump(`NO PROXY ROUTE[${probes},${perIP}]: ${ip} -> ${host}`);
-          };
-          res.end(); // invalid routes close connection!
+            let localIP = ip.match(/(?:192\.168|127\.\d+|10\.\d+|169\.254)\.\d+\.\d+$/);
+            if (!localIP || self.cfg.verbose) { // ignore diagnostics for local addresses unless verbose
+                let probes = statistics.inc(self.tag,'probes');
+                let perIP = blacklists.inc(self.tag,ip);
+                self.scribble.dump(`NO PROXY ROUTE[${probes},${perIP}]: ${ip} -> ${host}`);
+            };
+            res.end(); // invalid routes close connection!
         };
     };
 };
