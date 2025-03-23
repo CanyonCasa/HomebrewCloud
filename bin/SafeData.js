@@ -17,6 +17,13 @@
 ///************************************************************
 require("./Extensions2JS"); // dependency on Date stylings
 
+const patterns = {
+  id: /^[$a-z0-9_-]+/i,
+  text: /^[^\/<>]+/,
+  http: /(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/,
+  base64: /[A-Za-z0-9+\/_\-:=]+/  // allows colon joined base64/base64url strings
+}
+
 // simple regular expression pattern test ...
 function rexSafe(data,pattern,dflt) {
   var m=String(data).match(pattern);
@@ -52,14 +59,13 @@ function scalarSafe(data,filter,verbose){
       if (typeof dflt == 'string') dflt = dflt.split(',');  // dflt may be comma delimited string or array
       return dflt.indexOf(data)==-1 ? dflt[0] : data;
     default:
-      let re = (x) => new RegExp(x.slice(1,x.lastIndexOf('/')),x.slice(x.lastIndexOf('/')+1));
-      pat = pat=='id' ? /^[$a-z0-9_-]+/i : pat=='text' ? /^[^\/<>]+/ :
-            ((typeof pat=='string') && pat.startsWith('/')) ? re(pat) : undefined;
-      if (!(pat instanceof RegExp)) return dflt||''; // only data and regex pattern should remain...
-      let rx = rexSafe(data,pat,dflt);
-      if (verbose) console.log(`rexSafe: filter '`,data,`' with pattern: '${pat}' and default: '${dflt}' => ${rx}`);
+      let rex = (x) => new RegExp(x.slice(1,x.lastIndexOf('/')),x.slice(x.lastIndexOf('/')+1));
+      let re = patterns[pat] ? patterns[pat] : 
+            ((typeof pat=='string') && pat.startsWith('/')) ? rex(pat) : undefined;
+      if (!(re instanceof RegExp)) return dflt||''; // only data and regex pattern should remain...
+      let rx = rexSafe(data,re,dflt);
+      if (verbose) console.log(`rexSafe[${filter}]: '${data}' with pattern: '${re}' and default: '${dflt}' => ${rx}`);
       return rx;
- 
   };
 };
 
