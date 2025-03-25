@@ -52,7 +52,7 @@
  *    'http':   HTTP Date header format, per RFC7231
  *    'iso':    "YYYY-MM-DD'T'hh:mm:ssZ", JavaScript standard, not mutable
  *    'nice':   "XD XM" D YYYY h:mma", concise human readable format, i.e Sun Apr 7 2024 8:37AM 
- *    'scribe': "MM-DDThh:mm:ss", concise format for transcripts
+ *    'scribe': "MM-DDT0h:mm:ssa", concise format for transcripts
  *    'stamp:   filespec safe timestamp string, '20161207T212211Z'
  *    'NEW'     "NEW:key:value" will define a new format keyword or change an existing format, note iso is not mutable
  *  notes:
@@ -94,7 +94,7 @@ if (!Date.prototype.style) Date.prototype.style = function(frmt,realm) {
         form: 'YYYY-MM-DD hh:mm',
         http: 'XD, DD XM YYYY hh:mm:ss "GMT"',
         nice: 'XD XM D YYYY h:mma',
-        scribe: 'MM-DDThh:mm:ss',
+        scribe: 'MM-DDT0h:mm:ssa',
         stamp: 'YMMDDThhmmss'
     };
     let r =  String(realm||'').toLowerCase();   // validate params
@@ -132,6 +132,18 @@ if (!Date.prototype.style) Date.prototype.style = function(frmt,realm) {
             return (frmt).replace(RE,$0=>$0 in tkn ? tkn[$0] : $0.slice(1) in tkn ? pad(tkn[$0.slice(1)]) : $0.slice(1,-1));
     };
 };
+
+/**
+ * @function humanTime converts a time difference in milliseconds into human readable format
+ * @param {number} difference - time difference in milliseconds
+ * @return {{}} - human readable string - days, hrs, mins, secs
+*/
+if (!Date.prototype.humanTime) Date.prototype.humanTime = function(difference) {
+    let asTimeStr = t => t>86400000 ? `${Math.floor(t/86400000)} days, ${asTimeStr(t%86400000)}` : 
+        t>3600000 ? `${Math.floor(t/3600000)} hrs, ${asTimeStr(t%3600000)}` :
+        t>60000 ? `${Math.floor(t/60000)} mins, ${asTimeStr(t%60000)}` : `${t/1000} secs`;
+    return asTimeStr(difference);
+}
 
 ///*************************************************************
 /// Object Extensions...
