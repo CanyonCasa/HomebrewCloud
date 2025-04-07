@@ -34,8 +34,8 @@ function App(context) {
     this.db = context.shared.db.mapByKey(connection=>connection);   // reference any shared db conections, can't be merged
     (context.cfg.databases||{}).mapByKey((def,tag)=>{ def.tag = def.tag || tag; this.db[tag] = new jxDB(def); }); // add new db's
     // authentication setup required by auth & account middleware
-    this.authOptions = context.cfg.options===null ? null : context.cfg.options.auth===null ? null : context.cfg.options.auth;
-    this.authenticating = !!this.authOptions;
+    this.authOptions = (context.cfg?.options===null || context.cfg?.options?.auth===null) ? null : (context.cfg?.options?.auth || {});
+    this.authenticating = !!this.authOptions ;
     this.authServer = this.authOptions ? (typeof(this.authOptions)==='object' ? this.authOptions.url : this.authOptions) : null;
     if (this.authenticating && !this.authServer && !this.db.users) this.scribe.fatal('Users database not found, required for authentication');
     if (this.db.users) addUserCandy(this.db.users);
@@ -53,30 +53,37 @@ App.prototype.build = function() {
     let { handlers=[], options={}, root } = this.cfg;
     let { account={}, analytics, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
     function customizeRoute (cfg,defaultRoute) { cfg.route = cfg.route || defaultRoute || ''; return cfg; }
-    function addRoute (method,route,afunc) { serverware.addRoute(routeTable,method||'',route,afunc); };
+    let addRoute = (method,route,afunc,tag) => { 
+        serverware.addRoute(routeTable,method||'',route,afunc);
+        this.scribe.trace(`addRoute[${tag}]: ${method} @ '${route}'`)
+    };
     // create and build middleware stack starting with priority built-in configurable features...
-    if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));   // all routes
-    if (cors!==null) addRoute('any','',appNativeware.cors(cors));                     // all routes
+    if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics),'analytics');   // all routes
+    if (cors!==null) addRoute('any','',appNativeware.cors(cors),'cors');                     // all routes
     if (this.authenticating) {
+        this.scribe.trace(`Authenticating: (${this.authServer||'self'})`)
         if (!this.authServer) {
             customizeRoute(account, appNativeware.routes.account);
-            addRoute('any',account.route,appNativeware.account(account));  // hardwired default route
+            addRoute('any',account.route,appNativeware.account(account),'account');  // hardwired default route
         };
         customizeRoute(login, appNativeware.routes.login);
-        addRoute('any',login.route,appNativeware.login(login));        // hardwired default route
+        addRoute('any',login.route,appNativeware.login(login),'login');        // hardwired default route
+    } else {
+        this.scribe.warn(`NO Authentication!`)
     };
+
     // custom handlers and routes specified by configuration...
-    handlers.forEach(h=>{
+    for (let h of handlers) {
         let { code='', method='any', route='' } = h;
         //let codeWare = appCustomware[code] || appAPIware[code] || appNativeware[code] || null;
         let codeWare = appCustomware[code] ? appCustomware : appAPIware[code] ? appAPIware : 
             appNativeware[code] ? appNativeware : null;
         if (codeWare) {
             customizeRoute(h,codeWare?.routes[h.code]);
-            addRoute(method.toLowerCase(),h.route,codeWare[code](h));
+            addRoute(method.toLowerCase(),h.route,codeWare[code](h),code);
         };
-    });
-    if (root) addRoute('get','',appNativeware.content({root:root}));  // default open static server, if site root defined
+    };
+    if (root) addRoute('get','',appNativeware.content({root:root}),'root');  // default open static server, if site root defined
 };
 
 /**

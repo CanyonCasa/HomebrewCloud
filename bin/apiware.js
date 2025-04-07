@@ -85,7 +85,7 @@ function scribeMask(ctx) {
 async function sendMail(msg) {
     let site = this;
     let scribble = this.scribe;
-    let addressBook = site.db.users.query('contacts',{ref:'.+'}).mapByKey(v=>v.email);
+    let addressBook = site.db.users.query('',{ref:'.+'}).mapByKey(v=>v.email);
     let letter = {from: msg.from ? msg.from.includes('@')?msg.from:addressBook[msg.from] : '', subject: msg.subject||msg.subj };
     let timestamp = msg.time ? '['+new Date().toISOString()+']' : '';
     let header = msg.header || msg.hdr || (msg.id||msg.time) ? msg.id+timestamp+':\n' : '';
@@ -108,7 +108,7 @@ async function sendMail(msg) {
 async function sendText(msg) {
     let site = this;
     let scribble = this.scribe;
-    let phoneBook = site.db.users.query('contacts',{ref:'.+'}).mapByKey(v=>v.phone);
+    let phoneBook = site.db.users.query('$contacts',{ref:'.+'}).mapByKey(v=>v.phone);
     let tmsg = { callback: msg.callback, id: msg.id || '' };    // format optional header with id and/or time
     tmsg.timestamp = msg.time ? '['+new Date().toISOString()+']' : '';
     tmsg.body = msg.body || ((msg.header || msg.hdr || ((tmsg.id||tmsg.timestamp) ? tmsg.id+tmsg.timestamp+':\n' : '')) + msg.text);
@@ -307,7 +307,7 @@ async function upload(db,ctx) {
         }
     };
     return results;
-}
+};
 
 /**
  * @function api serves request endpoints defined by the Homebrew API.

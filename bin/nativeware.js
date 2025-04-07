@@ -51,7 +51,7 @@ async function grant(ctx) {
     let by = ctx.args.opts?.[1]==='text' ? 'text' : ctx.args.opts?.[1]==='mail' ? 'mail' : 'auto';
     let ft = (t,u)=>{return u=='d' ? (t>7?7:t)+' days' : u=='h' ? (t>24?ft(t/24,'d'):t+' hrs') : t>60? ft(t/60,'h') : t+' mins'};
     let expStr = ft(exp);
-    let contacts = usersDB.query('contacts',{ref:'.*'});
+    let contacts = usersDB.query('$contacts',{ref:'.*'});
     scribble.trace(`grant users: ${users}, exp: ${expStr}, by: ${by}`);
     try {
     let queue = await Promise.all(users.map(u=>{
@@ -121,16 +121,16 @@ nativeware.account = function account(options={}) {
                     break;
                 case 'groups':      // GET /user/groups
                     if (!ctx.authorize(rauth)) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
-                    return usersDB.query('groups');
+                    return usersDB.query('$groups');
                  case 'users':       // GET /user/users
                     if (!ctx.authorize(rauth)) { scribble.warn(`Manager/admin authorization required: ${action}`); throw 401; };
-                    return usersDB.query('users',{ref:user||'.+'});
+                    return usersDB.query('$users',{ref:user||'.+'});
                 case 'contacts':    // GET /user/contacts
                     if (!ctx.authorize(rauth)) { scribble.warn(`Contacts authorization required: ${action}`); throw 401; };
-                    return usersDB.query('contacts',{ref:user||'.+'});
+                    return usersDB.query('$contacts',{ref:user||'.+'});
                 case 'names':       // GET /user/names
                     if (!ctx.authorize(rauth)) { scribble.warn(`Authorization required: ${action}`); throw 401; };
-                    return usersDB.query('names',{ref:user||'.+'});
+                    return usersDB.query('$names',{ref:user||'.+'});
                     //let uData = usersDB.query(action,{ref:user||'.+'});
                     //if (uData) { return uData } else { throw 400; };
                 default:
@@ -159,7 +159,7 @@ nativeware.account = function account(options={}) {
                             record.username = record.username.toLowerCase();    // force lowercase usernames only
                             let selfAuth = record.username===ctx.user.username
                             // if user exists change action, else create action...
-                            let existing = usersDB.query('userByUsername',{username: record.username},{});
+                            let existing = usersDB.query('$userByUsername',{username: record.username},{});
                             let exists = verifyThat(existing,'isNotEmpty');
                             if (exists && !(manager||selfAuth)) throw 401;    // authorize changes or assume new
                             self.scribe.trace(`existing(${exists}) user[${record.username}]: ${print(existing,60)}`);
@@ -203,15 +203,15 @@ nativeware.account = function account(options={}) {
                 case 'groups':
                     if (!manager) throw 401;
                     let grps = ctx.request.body;
-                    return usersDB.modify('groups',grps);
+                    return usersDB.modify('$groups',grps);
                 default: throw 400;
             };
         };
         if (ctx.verbIs('patch') && action==='archive') {
             if (!ctx.authorize(usersDB.schema('auth')||'admin')) throw 401;      // check auth: DB auth or admin
-            let data = usersDB.query('archive');
-            let arc = usersDB.db('archive','@',data[0]);
-            let usrs = usersDB.db('users','$',data[1]);
+            let data = usersDB.query('$archive');
+            let arc = usersDB.db('$archive','@',data[0]);
+            let usrs = usersDB.db('$users','$',data[1]);
             usersDB.changed();
             let amsg = `Archived ${data[0].length} users; ${data[1].length} ACTIVE users.`
             scribble.log(amsg);
@@ -235,8 +235,12 @@ nativeware.cors = function cors(options={}) {
     let credentials = options.credentials===undefined ? true : !!options.credentials;
     return async function corsMW(ctx) {
         let origin = ctx.request.HEADERS['origin'] || '';
-        if (!origin) return await ctx.next();
+        if (!origin) {
+            this.scribe.trace('No CORS origin request header specified, skipping...');
+            return await ctx.next();
+        };
         if (allowedHosts.includes(origin)) {
+            this.scribe.trace('Adding CORS headers...');
             ctx.headers({
                 'Access-Control-Allow-Origin': origin, 
                 'Access-Control-Expose-Headers': '*'    // headers browser may expose to JavaScript
@@ -290,7 +294,7 @@ nativeware.login = function login(options={}) {
     let scribble = this.scribe;
     scribble.info(`Login nativeware initialized ...`);
     return async function loginMW(ctx) {
-        scribble.trace(`Login${'@'+(self.authServer?self.authServer:'')}: ${ctx.args.action} as ${ctx.user?.username}`);
+        scribble.trace(`Login${'@'+(self.authServer?self.authServer:'self')}: ${ctx.args.action} as ${ctx.user?.username}`);
         if (ctx.args.action=='logout') return {};
         if (!ctx.authenticated) throw 401;
         if (ctx.authenticated=='bearer' && !ctx.user.ext) throw { code: 401, msg: 'Token renewal requires login' };
