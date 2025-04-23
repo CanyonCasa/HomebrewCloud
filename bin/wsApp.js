@@ -42,9 +42,9 @@ function wsApp(config) {
     this.appName = 'wsApp';
     this.cfg = config;
     this.tag = config.tag;
-    this.definedTopics = config.topics.map(c=>({name: c.name, auth: c.auth||{}})).reduce((x,t)=>{
-        x[t.name]={name: t.name, auth:['pub','sub','usr']
-            .reduce((y,k)=>{y[k]=t.auth[k] ? asList(t.auth[k]):null; return y;},{})}; return x;},{}); // complete definition
+    this.definedTopics = config.topics.map(c=>({name: c.name, echo: !!c.echo, auth: c.auth||{}})).reduce((x,t)=>{
+        x[t.name]={name: t.name, echo: t.echo, auth:['pub','sub','usr']
+            .reduce((y,k)=>{y[k]=t.auth[k] ? asList(t.auth[k]):null; return y;},{})}; return x;},{}); // make complete definitions
     this.scribble = Scribe(config.tag);
     this.wss = new WebSocket.WebSocketServer({ noServer: true });   // no http server since routed via proxy
     this.clients = new Map();   // set of connected clients
@@ -57,7 +57,7 @@ function wsApp(config) {
         const metadata = { uuid, ref, hb, ...parameters };
         let topics = asList((parameters.topics||parameters.topic));
         this.clients.set(ws,{ws:ws, ref: ref, metadata:metadata, topics: topics, user: {member: []} });
-        this.scribble.log(`Websocket connection ${ref} established...`);
+        this.scribble.log(`Websocket connection "${ref}" established for topics [${topics}]...`);
         ws.send(JSON.stringify({topic: '-', ref: ref}));
 
         ws.on('error',(e)=>{
@@ -70,8 +70,8 @@ function wsApp(config) {
             let send = (clientx,msg) => { clientx.ws.send(JSON.stringify(msg)); };
             let err = (eclient,msg,e) => {
                 this.scribble.warn(e);
-                msg.error = {message: "invalid message", detail: e.toString()}
-                send(eclient,msg);
+                msg = {error: true, message: "invalid message", detail: e.toString()}
+                return send(eclient,msg);
             };
             let client = this.clients.get(ws);
             let msg = {};
@@ -103,10 +103,13 @@ function wsApp(config) {
                     this.scribble.trace(`User ${user.username||'???'} attempted unauthorized publishing to topic ${msg.topic}`);
                 } else {
                     this.clients.forEach(c=>{
-                        if (c.metadata.uuid===client.metadata.uuid || c.user.username===client.user.username) return;   // don't reply to self!
+                        let oneself = (c.metadata.uuid===client.metadata.uuid || c.user.username===client.user.username)
+                        if (!c.topics.includes(msg.topic)) return; // not subscribed to topic
+                        if (oneself && !this.definedTopics.echo) return; // don't reply to oneself unless echo!
                         let scheck = msg.topic in this.definedTopics ? this.definedTopics[msg.topic].auth.sub : null;
                         let authorizedToSubscribe = !scheck || client.user.member.some(m=>scheck.includes(m));
-                        let inDistribution = (msg.client===c.ref) || !msg.clients || msg.clients.includes(c.ref);
+                        let limitedDistribution = [...(msg.clients||[]),...(msg.client?[msg.client]:[])];
+                        let inDistribution = limitedDistribution.length===0 || limitedDistribution.includes(c.ref);
                         if (authorizedToSubscribe && inDistribution) {
                             let ucheck = msg.topic in this.definedTopics ? this.definedTopics[msg.topic].auth.usr : null;
                             if (ucheck && ucheck.includes(c.ref)) { 

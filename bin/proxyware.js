@@ -166,7 +166,7 @@ let Proxy = async function(config) {
                 if (app) {
                     req.hb = { route: route, proxy: proxies[tag] };
                     app.wss.handleUpgrade(req, socket, head, (ws)=>app.wss.emit('connection', ws, req));
-                    scribble.trace(`Request upgraded to websocket @ ${route}`); 
+                    scribble.trace(`Request upgraded to websocket @ ${req.url}`); 
                 } else {
                     socket.destroy();
                 };
