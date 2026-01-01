@@ -63,6 +63,7 @@ let proxyRouter = (tag) => {
                 let probes = statistics.inc(self.tag,'probes');
                 let perIP = blacklists.inc(self.tag,ip);
                 self.scribble.dump(`NO PROXY ROUTE[${probes},${perIP}]: ${ip} -> ${host}`);
+                if (!localIP) self.scribble.dump(`  Headers: ${JSON.stringify(req.headers)}`)
             };
             res.end(); // invalid routes close connection!
         };
@@ -148,25 +149,25 @@ let Proxy = async function(config) {
                 let sApp = null;
                 try { 
                     sApp = new (cfg.app ? require(cfg.app) : WebSocketApp)(scfg);
+                    if (sApp) socketRoutes[scfg.route] = sApp;
                     scribble.log(`Web socket[${sApp.appName}] configured for ${scfg.route}`);
                 }
                 catch(e) {
                     scribble.warn(`Failed to configure web socket app for ${key}: ${e.toString()}`);
                 }
-                if (sApp) socketRoutes[scfg.route] = sApp;
             });
             proxies[tag].socketRoutes = socketRoutes;
              // handle web sockets and start server
             proxies[tag].server.on('upgrade',async (req,socket,head) => {
                 socket.on('error', console.error);
-                socket.removeListener('error', console.error);
                 let route = req.url.split('?')[0];
                 let app = (route && route in proxies[tag].socketRoutes) ? proxies[tag].socketRoutes[route] : null;
+                scribble.trace(`upgrade: ${route} => ${app.appName}`)
                 // handle upgrade for valid route and websocket server...
                 if (app) {
                     req.hb = { route: route, proxy: proxies[tag] };
                     app.wss.handleUpgrade(req, socket, head, (ws)=>app.wss.emit('connection', ws, req));
-                    scribble.trace(`Request upgraded to websocket @ ${req.url}`); 
+                    scribble.trace(`Request upgraded to websocket @ ${req.url}`);
                 } else {
                     socket.destroy();
                 };

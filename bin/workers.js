@@ -38,8 +38,8 @@ var unsupported = async ()=>{ throw(501); };
 let cleanup = {
     callback: (code)=>{
         let internals = workers.internals();
-        scribe.write('','dump',[JSON.stringify(internals,null,2)]);
-        scribe.write('','flush',[`Graceful exit[${code}]...`]); // default callback
+        scribe.write('CLEANUP','dump',[JSON.stringify(internals,null,2)]);
+        scribe.write('CLEANUP','flush',[`Graceful exit[${code}]...`]); // default callback
     },
     delay: 400,
     called: false   // flag to prevent circular calls.

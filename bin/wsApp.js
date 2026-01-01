@@ -47,6 +47,7 @@ function wsApp(config) {
             .reduce((y,k)=>{y[k]=t.auth[k] ? asList(t.auth[k]):null; return y;},{})}; return x;},{}); // make complete definitions
     this.scribble = Scribe(config.tag);
     this.wss = new WebSocket.WebSocketServer({ noServer: true });   // no http server since routed via proxy
+    this.wss.on('error',(e)=>{console.log('trapped:',e)})
     this.clients = new Map();   // set of connected clients
 
     this.wss.on('connection',(ws, req) => {
@@ -103,9 +104,9 @@ function wsApp(config) {
                     this.scribble.trace(`User ${user.username||'???'} attempted unauthorized publishing to topic ${msg.topic}`);
                 } else {
                     this.clients.forEach(c=>{
-                        let oneself = (c.metadata.uuid===client.metadata.uuid || c.user.username===client.user.username)
+                        let oneself = ((c.metadata.uuid===client.metadata.uuid) || !!(c.user.username&&(c.user.username===client.user.username)))
                         if (!c.topics.includes(msg.topic)) return; // not subscribed to topic
-                        if (oneself && !this.definedTopics.echo) return; // don't reply to oneself unless echo!
+                        if (oneself && !this.definedTopics[msg.topic].echo) return; // don't reply to oneself unless echo!
                         let scheck = msg.topic in this.definedTopics ? this.definedTopics[msg.topic].auth.sub : null;
                         let authorizedToSubscribe = !scheck || client.user.member.some(m=>scheck.includes(m));
                         let limitedDistribution = [...(msg.clients||[]),...(msg.client?[msg.client]:[])];

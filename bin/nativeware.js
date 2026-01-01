@@ -11,7 +11,7 @@
 /// Dependencies...
 ///*************************************************************
 const { asList, asStr, resolveSafePath, verifyThat, print } = require('./helpers');
-const { analytics, auth, jwt, listFolder, mail, safeAccess, safeStat, sms } = require('./workers');  
+const { analytics, auth, blacklists, jwt, listFolder, mail, safeAccess, safeStat, sms } = require('./workers');  
 const { Cache, FileEntry } = require('./caching');
 const { ResponseContext } = require('./serverware');
 
@@ -218,6 +218,29 @@ nativeware.account = function account(options={}) {
             return {msg: amsg, archive: arc.length, archived: data[0].length, active: usrs.length};
         };
         throw 501;  // other methods not supported
+   };
+};
+
+
+/**
+ * @function blacklistCheck rejects the request to terminate connection
+ * @param {object} [options]
+ * @return {object} nativeware
+ */
+nativeware.blacklistCheck = function blacklistCheck(options={}) {
+    let scribble = this.scribe;
+    let blacklistExpressions = asList(options.blacklist ? options.blacklist : options).forEach(b=>new RegExp(b));
+    scribble.info(`Blacklist nativeware initialized... ${blacklistExpressions.length} expressions defined!`);
+    return async function blacklistCheckMW(ctx) {
+        let path =ctx.request.pathname;
+        blacklistExpressions.forEach(x=>{
+            if (x.test(path)) {
+                scribble.debug(`Blacklisted[${x}]: ${path}`);
+                blacklists.inc(x,path);
+                throw 'BLACKLIST';
+            };
+        });
+        return await ctx.next();
    };
 };
 

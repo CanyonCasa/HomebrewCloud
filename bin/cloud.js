@@ -91,20 +91,21 @@ if (app.db.users) addUserCandy(app.db.users);
 // build app handlers and routers...
 let [appNativeware, appAPIware, appCustomware] = [nativeware, apiware, customware].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(app) : v));  // bind f()'s to App scope
 let { handlers=[], options={}, root } = app.cfg;
-let { account={}, analytics, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
+let { account={}, analytics, blacklist, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
 function customizeRoute (cfg,defaultRoute) { cfg.route = cfg.route || defaultRoute || ''; return cfg; }
 function addRoute (method,route,afunc) { serverware.addRoute(app.routes,method||'',route,afunc); };
 // create and build middleware stack starting with priority built-in configurable features...
 if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));
+if (blacklist) addRoute('any','',appNativeware.blacklistCheck(blacklist));
 if (cors!==null) addRoute('any','',appNativeware.cors(cors));
-    // authentication setup required by auth & account middleware
+// authentication setup required by auth & account middleware
 if (app.authenticating) {
     if (!app.authServer) {
         customizeRoute(account, appNativeware.routes.account);
         addRoute('any',account.route,appNativeware.account(account));  // hardwired default route
     };
     customizeRoute(login, appNativeware.routes.login);
-    addRoute('any',login.route,appNativeware.login(login));        // hardwired default route
+    addRoute('any',login.route,appNativeware.login(login)); // hardwired default route
 };
 // custom handlers specified by configuration...
 handlers.forEach(h=>{
@@ -141,5 +142,4 @@ try {
 } catch(e) { 
     if (MODE=='production') sms({text:`HomebrewCloud service failed to started on host ${HOST}`})
       .catch(e=>{scribe.log('sms failure!:',e); });
-    scribe.fatal(`HomebrewCloud App failed to start --> ${e.toString()}`) 
-};
+    scribe.fatal(`HomebrewCloud App failed to start --> ${e.toString()}`);

@@ -385,7 +385,7 @@ serverware.defineRequestPreprocessor = function(cfg={}) {
         limits: { request: asBytes(opts.limits.request), upload: asBytes(opts.limits.upload) }};
     if (!fs.existsSync(bodyParseOptions.temp)) fs.mkdirSync(bodyParseOptions.temp);
 
-    return async function requestProcessor(req,ctx) {
+    return async function requestPreProcessor(req,ctx) {
         scribble.extra('requestPreProcessor entered...');
         let props = parseRequestProperties(req);    // parse request properties
         ctx.mergekeys(props);
@@ -476,31 +476,33 @@ serverware.defineErrorHandler = function(cfg={}) {
     let redirect = cfg.redirect || null;
 
     return async function errorHandler(err,ctx,res) {
-        try {
-            let ex = httpStatusMsg(err);            // standard HomebrewDIY error format
-            if (ex.code===405) scribble.trace(`errorHandler: ${print(ex)}`); // method not supported
-            if (ex.code===404 && redirect) {        // if not found provide the option of redirecting
-                let destination = ctx.request.href.replace(...redirect);
-                scribble.trace(`Redirect[${ctx.request.method}] ${ctx.request.href} -> ${destination}`);
-                res.writeHead(301,{Location: destination});
-            } else if (ex.code < 400) {             // status response only, not an error!
-                res.writeHead(ex.code,ex.msg);
-                scribble.trace(`Status[${ctx.request.method}] ${ctx.request.href} -> ${ex.code}:${ex.msg}`);
-            } else {                                // response with error message, if possible
-                if (ex.code===404) ex.detail = `(${ctx.request.href})`;
-                let eText = JSON.stringify(ex);
-                if (!res.headersSent) {
-                    res.setHeader('Content-Type', 'application/json');
-                    res.setHeader('Content-Length', eText.length);
-                    res.write(eText);
-                    scribble.error(`HTTP Error[${ex.code}]: ${ex.msg} ${ex.detail?', ' + print(ex.detail,60):''}`);
-                    if (ex.code===500 && ctx.debug) scribble.dump(err);
-                } else {
-                    scribble.error(`${ex.detail}`);
+        if (err!=='BLACKLIST') { // blacklist errors simply terminate the request
+            try {
+                let ex = httpStatusMsg(err);            // standard HomebrewDIY error format
+                if (ex.code===405) scribble.trace(`errorHandler: ${print(ex)}`); // method not supported
+                if (ex.code===404 && redirect) { // if not found provide the option of redirecting
+                    let destination = ctx.request.href.replace(...redirect);
+                    scribble.trace(`Redirect[${ctx.request.method}] ${ctx.request.href} -> ${destination}`);
+                    res.writeHead(301,{Location: destination});
+                } else if (ex.code < 400) {             // status response only, not an error!
+                    res.writeHead(ex.code,ex.msg);
+                    scribble.trace(`Status[${ctx.request.method}] ${ctx.request.href} -> ${ex.code}:${ex.msg}`);
+                } else {                                // response with error message, if possible
+                    if (ex.code===404) ex.detail = `(${ctx.request.href})`;
+                    let eText = JSON.stringify(ex);
+                    if (!res.headersSent) {
+                        res.setHeader('Content-Type', 'application/json');
+                        res.setHeader('Content-Length', eText.length);
+                        res.write(eText);
+                        scribble.error(`HTTP Error[${ex.code}]: ${ex.msg} ${ex.detail?', ' + print(ex.detail,60):''}`);
+                        if (ex.code===500 && ctx.debug) scribble.dump(err);
+                    } else {
+                        scribble.error(`${ex.detail}`);
+                    };
                 };
+            } catch(e) {            // trap any errors that happen in the process of sending error response
+                scribble.error(`HTTP Error: Error terminating request -> ${e.toString()}`);
             };
-        } catch(e) {            // trap any errors that happen in the process of sending error response
-            scribble.error(`HTTP Error: Error terminating request -> ${e.toString()}`);
         };
         res.end();          // terminate all request errors
     };

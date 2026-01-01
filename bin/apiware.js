@@ -85,7 +85,7 @@ function scribeMask(ctx) {
 async function sendMail(msg) {
     let site = this;
     let scribble = this.scribe;
-    let addressBook = site.db.users.query('',{ref:'.+'}).mapByKey(v=>v.email);
+    let addressBook = site.db.users.query('$contacts',{ref:'.+'}).mapByKey(v=>v.email);
     let letter = {from: msg.from ? msg.from.includes('@')?msg.from:addressBook[msg.from] : '', subject: msg.subject||msg.subj };
     let timestamp = msg.time ? '['+new Date().toISOString()+']' : '';
     let header = msg.header || msg.hdr || (msg.id||msg.time) ? msg.id+timestamp+':\n' : '';

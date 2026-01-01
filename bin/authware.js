@@ -52,6 +52,7 @@ function refer(ctx) {
         });
 };
 
+
 /**
 * @function authenticate performs user authentication based on the authorization header
 * @param {object} ctx context for the pending request
@@ -105,7 +106,6 @@ async function authenticate(ctx) {
                 } else {
                     return failed(user.username,'failed login', { code: 401, msg: 'Authentication failed!' });
                 };
-            ////////////////////////////////////////////////////////////////
             };
             delete user.credentials;
             ctx.user = user;
