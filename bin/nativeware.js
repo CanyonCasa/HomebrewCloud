@@ -210,8 +210,8 @@ nativeware.account = function account(options={}) {
         if (ctx.verbIs('patch') && action==='archive') {
             if (!ctx.authorize(usersDB.schema('auth')||'admin')) throw 401;      // check auth: DB auth or admin
             let data = usersDB.query('$archive');
-            let arc = usersDB.db('$archive','@',data[0]);
-            let usrs = usersDB.db('$users','$',data[1]);
+            let arc = usersDB.db('archive','@',data[0]);
+            let usrs = usersDB.db('users','$',data[1]);
             usersDB.changed();
             let amsg = `Archived ${data[0].length} users; ${data[1].length} ACTIVE users.`
             scribble.log(amsg);
@@ -229,7 +229,7 @@ nativeware.account = function account(options={}) {
  */
 nativeware.blacklistCheck = function blacklistCheck(options={}) {
     let scribble = this.scribe;
-    let blacklistExpressions = asList(options.blacklist ? options.blacklist : options).forEach(b=>new RegExp(b));
+    let blacklistExpressions = asList(options.blacklist ? options.blacklist : options).map(b=>RegExp(b));
     scribble.info(`Blacklist nativeware initialized... ${blacklistExpressions.length} expressions defined!`);
     return async function blacklistCheckMW(ctx) {
         let path =ctx.request.pathname;

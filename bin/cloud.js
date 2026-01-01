@@ -83,7 +83,8 @@ app.scribe = Scribe(tag);
 // authentication setup required by auth & account middleware
 app.authOptions = scfg.options===null ? null : scfg.options.auth===null ? null : scfg.options.auth;
 app.authenticating = !!app.authOptions;
-app.authServer = app.authOptions ? (typeof(app.authOptions)==='object' ? app.authOptions.url : app.authOptions) : null;
+app.authServer = typeof(app.authOptions)==='object' ? app.authOptions.url : 
+    app.authOptions==='string' ? app.authOptions : null;
 if (app.authenticating && !app.authServer && !app.db.users) app.scribe.fatal('Users database not found, required for authentication');
 // add syntax candy to database prototype...
 if (app.db.users) addUserCandy(app.db.users);
@@ -103,10 +104,12 @@ if (app.authenticating) {
     if (!app.authServer) {
         customizeRoute(account, appNativeware.routes.account);
         addRoute('any',account.route,appNativeware.account(account));  // hardwired default route
+    // else authentication will be handled by authWare.refer to authServer
     };
     customizeRoute(login, appNativeware.routes.login);
-    addRoute('any',login.route,appNativeware.login(login)); // hardwired default route
+    addRoute('any',login.route,appNativeware.login(login)); // hardwired default route always required for auth
 };
+console.log('authenticating:',app.authenticating,app.authServer,app.routes)
 // custom handlers specified by configuration...
 handlers.forEach(h=>{
     let { code='', method='any', route='' } = h;
@@ -143,3 +146,4 @@ try {
     if (MODE=='production') sms({text:`HomebrewCloud service failed to started on host ${HOST}`})
       .catch(e=>{scribe.log('sms failure!:',e); });
     scribe.fatal(`HomebrewCloud App failed to start --> ${e.toString()}`);
+};

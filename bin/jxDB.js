@@ -63,13 +63,13 @@ function dbWrapper(database) {
             return dbase;
         };
         if (ref===undefined) return dbase[collection];              // return the collection (or schema)
-        if (ref==='$') {                                            // replace entire collection
-            dbase[collection] = value;
-            return dbase[collection];
+        if (ref==='$') {
+            dbase[collection] = value;                              // replace entire collection
+            return dbase[collection];                               // return the collection (or schema)
         };
-        if (ref==='@') {                                            // replace entire collection
+        if (ref==='@') {
             dbase[collection] = dbase[collection].concat(value);    // append array of entries to collection
-            return dbase[collection];
+            return dbase[collection];                               // return the collection (or schema)
         };
         // schema object is not an array; note no schema ref getter, use this.db('_')[ref] syntax
         if (collection==='_') {
