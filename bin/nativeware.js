@@ -95,9 +95,10 @@ nativeware.account = function account(options={}) {
     scribble.info(`Account nativeware initialized ...`);
     return async function accountMW(ctx) {
         let { action, user, opts } = ctx.request.params;
+        let recipe = '$' + action;
         let manager = ctx.authorize('admin,manager');       // authenticated admin or manager
-        let rauth = usersDB.lookup(action).auth || 'admin'; // recipe specific auth or default to admin
-        scribble.trace(`user[${ctx.request.method}]: ${print(ctx.args)}`);
+        let rauth = usersDB.lookup(recipe).auth || 'admin'; // recipe specific auth or default to admin
+        scribble.trace(`user[${ctx.request.method}]: ${print(ctx.args)} (${rauth})`);
         if (ctx.verbIs('get')) {
             switch (action) {
                 case 'code':        // GET /user/code/<username> (request activation code)

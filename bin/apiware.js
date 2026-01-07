@@ -13,7 +13,7 @@
 /// Dependencies...
 ///*************************************************************
 const fsp = require('fs').promises;
-const { getAllMethods, print, resolveSafePath, splitAt, verifyThat } = require('./helpers');
+const { hash:sha256, getAllMethods, print, resolveSafePath, splitAt, verifyThat } = require('./helpers');
 const { auth: {genCode}, internals, mail, safeStat, sms } = require('./workers');  
 const { ResponseContext } = require('./serverware');
 const jxDB = require('./jxDB');
@@ -25,7 +25,7 @@ const jsonata = require('jsonata');
 // serverware middleware container    
 var apiware = {
 	routes: {	// default routes
-		api: '/:recipe([$@!~][a-z0-9_-]*)/:opts*'   // updated to incorporate prefix into recipe name as required by vulnerability with path-to-regexp
+		api: '/:recipe([$@!~.][a-z0-9_-]*)/:opts*'   // updated to incorporate prefix into recipe name as required by vulnerability with path-to-regexp
 	}
 };
 
@@ -151,7 +151,7 @@ async function ask(db,ctx) {
     if (auth && !ctx.authorize(auth)) throw 401;  // check auth
     if (!recipe.file) return db.query(recipe,{}.mergekeys(ctx.args),ctx.user);     // synchronous query from loaded db
     scribble.trace(`ask: asynchronous response...`);
-    return await db.recall(recipe,{}.mergekeys(ctx.args),ctx.user);	// async external db operation
+    return db.recall(recipe,{}.mergekeys(ctx.args),ctx.user);	// async external db operation
 };
 
 async function tell(db,ctx) {
@@ -163,7 +163,7 @@ async function tell(db,ctx) {
     if (auth && !ctx.authorize(auth)) throw 401;  // check auth
 	if (!recipe.file) return db.modify(recipe,ctx.request.body,ctx.user);
     scribble.trace(`tell: asynchronous response...`);
-    return await db.store(recipe,ctx.request.body,ctx.user);	// async external db operation
+    return db.store(recipe,ctx.request.body,ctx.user);	// async external db operation
 };
 
 async function patch(db,ctx) {
@@ -309,6 +309,42 @@ async function upload(db,ctx) {
     return results;
 };
 
+// handler to retrieve server messages
+// ex: GET /.ssn, where authentication header is required per recipe.
+async function msgList(db,ctx) {
+    let scribble = this.scribe;
+    scribble.trace(`msgList: ${ctx.args.recipe} ${print(ctx.args)}`);
+    let recipe = db.lookup(ctx.args.recipe||'');    // get recipe
+    if (verifyThat(recipe,'isEmpty')) return await ctx.next();
+    let auth = recipe.auth instanceof Array ? recipe.auth[1] : recipe.auth;
+    if (auth && !ctx.authorize(auth)) throw 401;  // check auth
+    let listing = await db.query(recipe,{},ctx.user);
+    return { sources: recipe.sources||{[recipe.name.slice(1)]:recipe.source}, listing: listing };    
+};
+
+// handler to post/delete server messages
+// ex: POST /.ssn, where body contains JSON object with epoch, salt, hash, msg, error, and optional details, file fields
+async function msgLog(db,ctx) {
+    let scribble = this.scribe;
+    scribble.trace(`msgLog: ${ctx.args.recipe} ${print(ctx.args)}`);
+    let recipe = db.lookup(ctx.args.recipe||'');    // get recipe
+    if (verifyThat(recipe,'isEmpty')) return await ctx.next();
+    if (verifyThat(ctx.request.body,'isArrayOfTrueObjects')) {
+        // [{ref:<id>, record:null},...] to delete messages
+        if (!ctx.authorize('server')) throw 403; // requires authorization
+        return db.modify(recipe,ctx.request.body,ctx.user);
+    };
+    // otherwise add a validated message...
+    let { epoch, salt, hash, msg, error=0, details='', file='' } = ctx.request.body;
+    let now = new Date();
+    if (!epoch ) throw 400; // request must include epoch
+    if (Math.abs(+now/1000-ctx.request.body.epoch)>30) throw 403  // epoch must be within 30s
+    let text = `${recipe.secret} ${epoch} ${salt} ${error} ${msg} ${details} ${file}`;
+    if (sha256(text)!==hash) throw 403; // hash must match
+    let data = [null, recipe.name.slice(1), now.style('iso'), error, msg||'', details||'',file||''];
+    return db.modify(recipe,[{ref:null,record:data}],ctx.user); // save message
+};
+
 /**
  * @function api serves request endpoints defined by the Homebrew API.
  * @param {object} [options]
@@ -351,6 +387,9 @@ apiware.api = function api(options={}) {
                 if (ctx.verbIs('get')) return await stats.call(site,db,ctx);
                 if (ctx.verbIs('post')) return await upload.call(site,db,ctx);
                 throw 405;
+            case '.':   // API data posting via hash validation...
+                if (ctx.verbIs('get')) return await msgList.call(site,db,ctx);
+                if (ctx.verbIs('post')) return await msgLog.call(site,db,ctx);
             default: 
                 return await ctx.next();
         };

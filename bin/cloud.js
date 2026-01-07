@@ -109,7 +109,6 @@ if (app.authenticating) {
     customizeRoute(login, appNativeware.routes.login);
     addRoute('any',login.route,appNativeware.login(login)); // hardwired default route always required for auth
 };
-console.log('authenticating:',app.authenticating,app.authServer,app.routes)
 // custom handlers specified by configuration...
 handlers.forEach(h=>{
     let { code='', method='any', route='' } = h;

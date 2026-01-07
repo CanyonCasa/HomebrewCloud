@@ -293,7 +293,7 @@ jxDB.prototype.modify = function modify(recipeSpec, data, user={}) {
                     let newRecord = recipe.entry instanceof Array ? record : jxCopy(recipe.entry||{}).mergekeys(record);
                     // unique should return a unique index value for collection and key value applies to, such as id, tag, 0
                     let unique = recipe.unique ? jsonata(recipe.unique).evaluate(this.db()) : {};
-                    if ('key' in unique) { ref=ref||unique.value, newRecord[unique.key] = newRecord[unique.key] || unique.value; };
+                    if ('key' in unique) { ref=ref||unique.value||1, newRecord[unique.key] = newRecord[unique.key]||unique.value||1; };
                     let safeNewRecord = jxSafe({ref: ref, record: newRecord},recipe.filter||'*');
                     this.scribble.dump(`jxDB.modify[new ${recipe.name}]: ${print(safeNewRecord)}}`);
                     this.scribble.trace(`jxDB.modify[new ${recipe.name}]: ${print(safeNewRecord,60)}}`);

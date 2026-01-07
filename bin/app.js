@@ -51,7 +51,7 @@ App.prototype.build = function() {
     let routeTable = this.routes;
     let [appNativeware, appAPIware, appCustomware] = [nativeware, apiware, customware].map(w=>w.mapByKey(v=>typeof v=='function' ? v.bind(this) : v));  // bind f()'s to App scope
     let { handlers=[], options={}, root } = this.cfg;
-    let { account={}, analytics, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
+    let { account={}, analytics, blacklist, cors, login={} } = options===null ? { analytics: null, cors: null } : options;
     function customizeRoute (cfg,defaultRoute) { cfg.route = cfg.route || defaultRoute || ''; return cfg; }
     let addRoute = (method,route,afunc,tag) => { 
         serverware.addRoute(routeTable,method||'',route,afunc);
@@ -59,6 +59,7 @@ App.prototype.build = function() {
     };
     // create and build middleware stack starting with priority built-in configurable features...
     if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics),'analytics');   // all routes
+    if (blacklist) addRoute('any','',appNativeware.blacklistCheck(blacklist));
     if (cors!==null) addRoute('any','',appNativeware.cors(cors),'cors');                     // all routes
     if (this.authenticating) {
         this.scribe.trace(`Authenticating: (${this.authServer||'self'})`)
@@ -69,7 +70,7 @@ App.prototype.build = function() {
         customizeRoute(login, appNativeware.routes.login);
         addRoute('any',login.route,appNativeware.login(login),'login');        // hardwired default route
     } else {
-        this.scribe.warn(`NO Authentication!`)
+        this.scribe.warn(`NO Authentication!`);
     };
 
     // custom handlers and routes specified by configuration...

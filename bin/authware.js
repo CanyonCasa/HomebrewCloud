@@ -52,7 +52,6 @@ function refer(ctx) {
         });
 };
 
-
 /**
 * @function authenticate performs user authentication based on the authorization header
 * @param {object} ctx context for the pending request
@@ -94,7 +93,7 @@ async function authenticate(ctx) {
             if (user.status!=='ACTIVE') return failed (user.username,'failed inactive', { code: 401, msg: 'Inactive user' });
             let valid = await validate(header,user);
             ////////////////////////////////////////////////////////////////
-            // TEMPORARY PATCH FOR BACK COMPATIBILITY WITH PRIOR HOMEBREW CODE
+            // TEMPORARY PATCH FOR BACK COMPATIBILITY WITH PRIOR HOMEBREW CODE: POSSIBLY MORE SECURE AS THIS SHOULD BE DEFAULT???
             if (!valid) {   // may be old format of pre-hashed password...
                 let oldChallenge = hash(header.username+header.password);
                 valid = await auth.checkPW(oldChallenge,user.credentials.hash);
@@ -107,6 +106,7 @@ async function authenticate(ctx) {
                     return failed(user.username,'failed login', { code: 401, msg: 'Authentication failed!' });
                 };
             };
+            ////////////////////////////////////////////////////////////////
             delete user.credentials;
             ctx.user = user;
             logins.log(user.username,'validated basic login');
