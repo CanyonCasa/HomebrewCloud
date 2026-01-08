@@ -58,8 +58,8 @@ App.prototype.build = function() {
         this.scribe.trace(`addRoute[${tag}]: ${method} @ '${route}'`)
     };
     // create and build middleware stack starting with priority built-in configurable features...
-    if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics),'analytics');   // all routes
     if (blacklist) addRoute('any','',appNativeware.blacklistCheck(blacklist));
+    if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics),'analytics');   // all routes
     if (cors!==null) addRoute('any','',appNativeware.cors(cors),'cors');                     // all routes
     if (this.authenticating) {
         this.scribe.trace(`Authenticating: (${this.authServer||'self'})`)

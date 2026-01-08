@@ -11,7 +11,7 @@
 /// Dependencies...
 ///*************************************************************
 const { asList, asStr, resolveSafePath, verifyThat, print } = require('./helpers');
-const { analytics, auth, blacklists, jwt, listFolder, mail, safeAccess, safeStat, sms } = require('./workers');  
+const { analytics, auth, blacklist, jwt, listFolder, mail, safeAccess, safeStat, sms, statistics } = require('./workers');  
 const { Cache, FileEntry } = require('./caching');
 const { ResponseContext } = require('./serverware');
 
@@ -233,11 +233,12 @@ nativeware.blacklistCheck = function blacklistCheck(options={}) {
     let blacklistExpressions = asList(options.blacklist ? options.blacklist : options).map(b=>RegExp(b));
     scribble.info(`Blacklist nativeware initialized... ${blacklistExpressions.length} expressions defined!`);
     return async function blacklistCheckMW(ctx) {
-        let path =ctx.request.pathname;
+        let path = ctx.request.pathname;
         blacklistExpressions.forEach(x=>{
             if (x.test(path)) {
                 scribble.debug(`Blacklisted[${x}]: ${path}`);
-                blacklists.inc(x,path);
+                blacklist.inc(x,path);
+                statistics.inc('blacklist','check');
                 throw 'BLACKLIST';
             };
         });
@@ -296,10 +297,10 @@ nativeware.logAnalytics = function logAnalytics(options={}) {
     scribble.info('Analytics nativeware initialized...');
     return async function logAnalyticsMW(ctx) {
         let [ip, path, usr] =[ctx.request.remote.ip, ctx.request.pathname, ctx.user.username||'-'];
-        scribble.debug(`Analytics: ${ip} : ${path} : ${usr}`);
+        scribble.debug(`Analytics: ${ip} : ${path||'/'} : ${usr}`);
         log.forEach(a=>{
             if (a=='ip') analytics.inc('ip',ip);
-            if (a=='page') analytics.inc('page',path);
+            if (a=='page') analytics.inc('page',path||'/');
             if (a=='user') analytics.inc('user',usr);
         });
         return await ctx.next();

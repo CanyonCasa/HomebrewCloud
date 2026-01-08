@@ -23,7 +23,7 @@ const httpProxy = require('http-proxy');
 const tls = require('tls');
 const fs = require('fs');
 const fsp = fs.promises;
-const { blacklists, httpStatusMsg, Scribe, statistics } = require('./workers');
+const { blacklist, httpStatusMsg, Scribe, statistics } = require('./workers');
 const WebSocketApp = require('./wsApp');
 
 ///*************************************************************
@@ -59,11 +59,14 @@ let proxyRouter = (tag) => {
             };
         } else {
             let localIP = ip.match(/(?:192\.168|127\.\d+|10\.\d+|169\.254)\.\d+\.\d+$/);
-            if (!localIP || self.cfg.verbose) { // ignore diagnostics for local addresses unless verbose
-                let probes = statistics.inc(self.tag,'probes');
-                let perIP = blacklists.inc(self.tag,ip);
-                self.scribble.dump(`NO PROXY ROUTE[${probes},${perIP}]: ${ip} -> ${host}`);
-                if (!localIP) self.scribble.dump(`  Headers: ${JSON.stringify(req.headers)}`)
+            let probes = statistics.inc(self.tag,'probes');
+            if (!localIP) {
+                let perIP = blacklist.inc(self.tag,ip);
+                fs.statistics.inc('blacklist',self.tag);
+                self.scribble.debug(`BLACKLISTED PROXY ROUTE[${probes},${perIP}]: ${ip} -> ${host} -> ${method} ${url}`);
+                self.scribble.dump(`  Headers: ${JSON.stringify(req.headers)}`);
+            } else if (self.cfg.verbose) { // ignore diagnostics for local addresses unless verbose
+                self.scribble.debug(`NO PROXY ROUTE ${ip} -> ${host} -> ${method} ${url}`);
             };
             res.end(); // invalid routes close connection!
         };

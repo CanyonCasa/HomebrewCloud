@@ -556,7 +556,7 @@ class Internals {
 
 // internal server data...
 workers.analytics = new Internals();
-workers.blacklists = new Internals();
+workers.blacklist = new Internals();
 workers.logins = new Internals();
 workers.statistics = new Internals();
 workers.logins.log = function log(usr, tag, err) {
@@ -587,7 +587,7 @@ workers.internals = ()=>{
     if (!workers.statistics.get('$','start')) workers.statistics.set('$','start',new Date().toISOString() );
     workers.statistics.set('$','uptime',asTimeStr(new Date() - new Date(workers.statistics.get('$','start'))));
     let internals = { statistics: workers.statistics.get(), analytics: workers.analytics.get(),
-        logins: workers.logins.get(), blacklists: workers.blacklists.get() };
+        logins: workers.logins.get(), blacklist: workers.blacklist.get() };
     return internals;
 }
 

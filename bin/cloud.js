@@ -96,8 +96,8 @@ let { account={}, analytics, blacklist, cors, login={} } = options===null ? { an
 function customizeRoute (cfg,defaultRoute) { cfg.route = cfg.route || defaultRoute || ''; return cfg; }
 function addRoute (method,route,afunc) { serverware.addRoute(app.routes,method||'',route,afunc); };
 // create and build middleware stack starting with priority built-in configurable features...
-if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));
 if (blacklist) addRoute('any','',appNativeware.blacklistCheck(blacklist));
+if (analytics!==null) addRoute('any','',appNativeware.logAnalytics(analytics));
 if (cors!==null) addRoute('any','',appNativeware.cors(cors));
 // authentication setup required by auth & account middleware
 if (app.authenticating) {
