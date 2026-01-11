@@ -62,7 +62,7 @@ let proxyRouter = (tag) => {
             let probes = statistics.inc(self.tag,'probes');
             if (!localIP) {
                 let perIP = blacklist.inc(self.tag,ip);
-                fs.statistics.inc('blacklist',self.tag);
+                statistics.inc('blacklist',self.tag);
                 self.scribble.debug(`BLACKLISTED PROXY ROUTE[${probes},${perIP}]: ${ip} -> ${host} -> ${method} ${url}`);
                 self.scribble.dump(`  Headers: ${JSON.stringify(req.headers)}`);
             } else if (self.cfg.verbose) { // ignore diagnostics for local addresses unless verbose
