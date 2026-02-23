@@ -54,28 +54,28 @@ async function grant(ctx) {
     let contacts = usersDB.query('$contacts',{ref:'.*'});
     scribble.trace(`grant users: ${users}, exp: ${expStr}, by: ${by}`);
     try {
-    let queue = await Promise.all(users.map(u=>{
-        if (!contacts[u]) return { report: null, summary: { msg: `No contact for user` }};
-        let passcode = auth.getLoginCode();
-        usersDB.chgUser(u,{credentials:{ passcode: passcode }});
-        let msg =`${ctx.user.fullname} granted access to...\n  user: ${u}\n  passcode: ${passcode.code}\n  valid: ${expStr}`;
-        scribble.trace(`Action[grant] ${msg.replaceAll('\n','')}`);
-        if (by!=='mail' && contacts[u].phone) {
-            return sms({ to:contacts[u].phone, text: msg });
-        } else if ((by==='mail' && contacts[u].email) || (by==='auto' && !contacts[u].phone && !contacts[u].email)){
-            return mail({ to:contacts[u].email, text: msg });
-        } else { // no specified contact...
-            let via = by==='text' ? 'phone' : by==='mail' ? 'email' : 'phone/email';
-            return { report: null, summary: { msg: `No contact ${via} for user` }};
-        }
-    }));
-    let ok=[], fail=[];
-    let reporting = (rpt,i) =>{
-        if (rpt.error) { scribble.warn(print(rpt.summary.msg,80));} else {scribble.info(print(rpt.summary.msg,80)); };
-        (rpt.error ? fail : ok).push(users[i]);
-    };
-    queue.forEach((rpt,i)=>{ if (rpt instanceof Array) { rpt.forEach(r=>reporting(r,i)); } else { reporting(rpt,i) }; });
-    return { msg: `Login code sent by ${by} to ${ok.join(',')}`, ok: ok, fail: fail, queue:queue }
+        let queue = await Promise.all(users.map(u=>{
+            if (!contacts[u]) return { report: null, summary: { msg: `No contact for user` }};
+            let passcode = auth.getLoginCode();
+            usersDB.chgUser(u,{credentials:{ passcode: passcode }});
+            let msg =`${ctx.user.fullname} granted access to...\n  user: ${u}\n  passcode: ${passcode.code}\n  valid: ${expStr}`;
+            scribble.trace(`Action[grant] ${msg.replaceAll('\n','')}`);
+            if (by!=='mail' && contacts[u].phone) {
+                return sms({ to:contacts[u].phone, text: msg });
+            } else if ((by==='mail' && contacts[u].email) || (by==='auto' && !contacts[u].phone && !contacts[u].email)){
+                return mail({ to:contacts[u].email, text: msg });
+            } else { // no specified contact...
+                let via = by==='text' ? 'phone' : by==='mail' ? 'email' : 'phone/email';
+                return { report: null, summary: { msg: `No contact ${via} for user` }};
+            }
+        }));
+        let ok=[], fail=[];
+        let reporting = (rpt,i) =>{
+            if (rpt.error) { scribble.warn(print(rpt.summary.msg,80));} else {scribble.info(print(rpt.summary.msg,80)); };
+            (rpt.error ? fail : ok).push(users[i]);
+        };
+        queue.forEach((rpt,i)=>{ if (rpt instanceof Array) { rpt.forEach(r=>reporting(r,i)); } else { reporting(rpt,i) }; });
+        return { msg: `Login code sent by ${by} to ${ok.join(',')}`, ok: ok, fail: fail, queue:queue }
     } catch(e) { 
         let emsg = `Action[grant]: Granting permission failed => ${e.toString()}`;
         scribble.error(emsg);

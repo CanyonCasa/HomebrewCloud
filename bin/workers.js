@@ -20,11 +20,13 @@ const fsp = require('fs').promises;
 const path = require('path');
 const qs = require('querystring');
 const https = require('https');
-const { asList, asStyle, asTimeStr, base64:x64, hmac, jxTo, pad, print, uniqueID } = require('./helpers');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer');
-const { resolve } = require('dns');
-const { ExportConfigurationInstance } = require('twilio/lib/rest/bulkexports/v1/exportConfiguration');
+const { asList, asStyle, asTimeStr, base64:x64, hmac, jxTo, pad, print, uniqueID } = require('./helpers');
+const QRCode = require('qrcode');
+const nodemailer = (() => { try { return require('nodemailer'); } catch(e) { return null; } })();
+//const { ExportConfigurationInstance } = (() => { 
+//    try { return require('twilio/lib/rest/bulkexports/v1/exportConfiguration'); } catch(e) { return null; } })(); 
 
 
 ///*************************************************************
@@ -77,6 +79,93 @@ workers.cleanupProcess = (options={}) => { cleanup.mergekeys(options); return cl
 ///*************************************************************
 /// Authentication code routines...
 
+// base32 TOTP key generator, no padding
+let base32KeyGen = (n=16) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; // base32 chars
+    return crypto.randomBytes(n).reduce((key, byte) => key + chars[byte % chars.length], '');
+}
+
+// convert base32 TOTP key, with or without padding, to byte array
+let base32ToBytes = (key) => {
+    let bytes = [];
+    let bits = 0;
+    Buffer.from(key.replace("=","")).reduce((value,byte)=>{
+        value = (value<<5) + (byte>55 ? byte-65 : byte-50+26);
+        bits += 5;
+        if (bits>=8) { bytes.push((value >> (bits - 8)) & 0xFF); bits -=8; }
+        return value;
+    }, 0);
+    return Buffer.from(bytes);
+}
+
+/**
+ * @class totp provides routines to generate and check time-based one time passcodes
+ * @function keyGen creates a base32 TOTP key
+ * @param {number} n - length of key in bytes, default 16
+ * @returns {string} - base32 encoded secret key
+ * @function bufferFromKey converts a base32 TOTP key to byte array
+ * @param {string} key - base32 encoded secret key
+ * @returns {Buffer} - byte array of the key
+ * @function codeGen generates a time-based one-time passcode
+ * @param {number} epoch - epoch time in seconds
+ * @param {string} secret - base32 encoded secret key
+ * @param {object} params - optional parameters: digits, step, algorithm, tolerance
+ * @returns {array} - [code, remaining seconds in step]
+ * @function check validates a challenge code and returns a true/false result
+ * @param {string} challengeCode - code to be tested
+ * @param {string} secret - base32 encoded secret key
+ * @returns {params} - optional validation parameters: digits, step, algorithm, tolerance
+ * @function authy generates an Authy compatible QR code
+ * @param {object} params - optional parameters: account, issuer, secret, algorithm, digits, period
+ * @return {object} - including data string, secret, and QR code as dataURL image
+ */
+let cfgTOTP = { algorithm:'SHA1', digits:6, step:30, tolerance:1, account: 'user', issuer: 'MyApp', secret: '' };
+let totp = {
+    keyGen: (n=16) => { // generate base32 TOTP key of n chars, without padding
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; // base32 chars
+        return crypto.randomBytes(n).reduce((key, byte) => key + chars[byte % chars.length], '');
+    },
+    bufferFromKey: (key) => {   // convert base32 TOTP key, with or without padding, to byte array
+        let bytes = [];
+        let bits = 0;
+        Buffer.from(key.replace("=","")).reduce((value,byte)=>{
+            value = (value<<5) + (byte>55 ? byte-65 : byte-50+26);
+            bits += 5;
+            if (bits>=8) { bytes.push((value >> (bits - 8)) & 0xFF); bits -=8; }
+            return value;
+        }, 0);
+        return Buffer.from(bytes);
+    },
+    codeGen: (epoch, secret, params={}) => {
+        let { step, digits, algorithm } = Object.assign({}, cfgTOTP, params);
+        let secretBytes = totp.bufferFromKey(secret);
+        let steps = Math.floor(epoch / step);
+        let stepBytes = Uint8Array.from(Array(7,6,5,4,3,2,1,0).map((v)=>Number(BigInt(steps)>>BigInt(8*v))&0xFF));
+        let buf = hmac(stepBytes, secretBytes, '', algorithm);
+        let idx = buf[buf.length-1] & 0xF;
+        code = ((buf[idx] & 0x7F) << 24 | (buf[idx+1] & 0xFF) << 16 | (buf[idx+2] & 0xFF) << 8 | (buf[idx+3] & 0xFF));
+        codeStr = ("0".repeat(digits) + String(code % 10**digits)).slice(-digits);
+        return [ codeStr, step - epoch % step ];    // code 'digits long with leading zeros', seconds remaining in step
+    },
+    check: (challengeCode, secret, params={}) => {
+        let { tolerance, step } = Object.assign({}, cfgTOTP, params);
+        let epoch = Math.floor(Date.now() / 1000);
+        for (let t = -tolerance; t <= tolerance; t++)
+            if (challengeCode === totp.codeGen(epoch+(t*step), secret, params)[0]) return true;
+        return false;
+    },
+    authy: async (params={}) => { // generates a data string and QR code for Authy compatible TOTP
+        let { account, issuer, secret, algorithm, digits, period, n=16 } = Object.assign({}, cfgTOTP, params);
+        if (!secret) secret = totp.keyGen(n);
+        issuer = encodeURIComponent(issuer);
+        account = encodeURIComponent(account || issuer);
+        let prefix = `otpauth://totp/`;
+        let data = `${prefix}${issuer}:${account}?secret=${secret}&issuer=${issuer}&algorithm=${algorithm}&digits=${digits}&period=${period}`;
+        let qrParams = { errorCorrectionLevel:'H', type:'image/png', quality:0.92, margin:1, color:{ dark: '#000000', light: '#FFFFFF' } };
+        return { data: data, secret: secret, qr: await QRCode.toDataURL(data, qrParams) };
+    }
+};
+
 /**
  * @class auth provides routines to generate and check authentication codes and passwords
  * @function checkCode validates a challenge code and returns a true/false result
@@ -98,19 +187,31 @@ workers.cleanupProcess = (options={}) => { cleanup.mergekeys(options); return cl
  * @function getActivationCode returns an activation code formatted per configuration
  * @function getLoginCode returns an activation code formatted per configuration
  */
-let cfgAuth = { activation: {size: 6, base: 10, expiration: 10}, login: {size: 7, base: 36, expiration: 10}, bcrypt_iterations: 11}
-let auth = { 
+let cfgAuth = { 
+    activation: { size: 6, base: 10, expiration: 10 }, 
+    login: { size: 7, base: 36, expiration: 10 }, 
+    bcrypt_iterations: 11,
+    totp: { digits: 6, hash: 'sha256', step: 30, tolerance: 1 }
+};
+let auth = {
     checkCode: (challengeCode,passcode) => {
         if (!passcode) return false;
         let expires = new Date((passcode.iat+passcode.exp)*1000);
         if (expires<new Date()) return false;
         return challengeCode===passcode.code; },
     checkPW: async (pw,hash) => await bcrypt.compare(pw,hash),
+    checkTOTP: async(challengeCode,totpKey) => {
+        if (!totpKey) return false;
+        let steps = Math.trunc(new Date().valueOf()/1000/cfgAuth.totp.step);
+        // more needed here...
+        return false
+    },
     genCode: (size=7,base=10,exp=10) => ({code: uniqueID(size,base), iat: new Date().valueOf()/1000|0, exp: exp*60}),
     genHashPW: async (pw) => await bcrypt.hash(pw,cfgAuth.bcrypt_iterations),
     getActivationCode: function() { 
         let { size, base, expiration } = cfgAuth.activation; 
-        return auth.genCode(size, base, expiration); },
+        return auth.genCode(size, base, expiration);
+    },
     getLoginCode: function() { 
         let { size, base, expiration } = cfgAuth.login;
         return auth.genCode(size, base, expiration); }
@@ -436,7 +537,6 @@ workers.Scribe = function Scribe(config={}) {
 
 /// SMS Text Messaging service...
 let cfgTwilio = null;
-const prefix = (n)=>n && String(n).replace(/^\+{0,1}1{0,1}/,'+1'); // phone number formatting helper to prefix numbers with +1
 /**
  * @function sms sends a text message via Twilio, throws an error if Twilio module not installed
  * @param {{}} msg - message object containing numbers list and text
@@ -596,6 +696,7 @@ module.exports = function configure(cfg={}) {
     if ((typeof cfg=='object') && cfg!==null) {
         if (cfg.auth) cfgAuth.mergekeys(cfg.auth);
         if (cfg.jwt) cfgJWT.mergekeys(cfg.jwt);
+        if (cfg.totp) cfgTOTP.mergekeys(cfg.totp);
         mimeTypesExtend(cfg.mimeTypes); // must be called with or w/o configuration
         if (cfg.mail) { // set configuration and create transport
             cfgMail = cfg.mail;

@@ -143,9 +143,19 @@ let parseAuthHeader = (header) => {
 };
 
 let validate = async (login={}, user={credentials:{}}) => {
-    if (!login.username || (login.username!==user.username)) return false;   // not the correct account
-    if (await auth.checkPW(login.password,user.credentials.hash)) return true;           // valid password
-    if (auth.checkCode(login.password,user.credentials.passcode)) return true;           // or a passcode login
+    if (!login.username || (login.username!==user.username)) return false;   // no username or not the correct account
+    if (user.credentials.mfa) {
+        // get challenge code
+        // verify password with hash AND challenge code with MFA key
+        return false
+        //return await auth.checkMFA(login.password,user.credentials.hash,mfa))
+    };
+    if (user.credentials.totp) {
+        // get challenge code and verify TOTP code with TOTP key
+        return false;
+    };
+    if (await auth.checkPW(login.password,user.credentials.hash)) return true;  // valid password
+    if (auth.checkCode(login.password,user.credentials.passcode)) return true;  // or a passcode login
     return false;
 };
 
