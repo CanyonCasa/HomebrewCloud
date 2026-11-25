@@ -20,7 +20,8 @@ require("./Extensions2JS"); // dependency on Date stylings
 const patterns = {
   id: /^[$a-z0-9_-]+/i,
   text: /^[^\/<>]+/,
-  http: /(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/,
+  //http: /(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/,
+  http: /^https?:\/\/(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(?::\d{1,5})?(?:\/?[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)?$/,
   base64: /[A-Za-z0-9+\/_\-:=]+/  // allows colon joined base64/base64url strings
 }
 
